@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hashtag Pulse — Viral Hashtag Analyzer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.whop.com/sdk.js"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9fafb;
+      color: #111827;
+      margin: 0; padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      background: white;
+      width: 100%;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    button:hover {
+      background: #1e40af;
+    }
+    main {
+      max-width: 700px;
+      width: 100%;
+      background: white;
+      margin-top: 2rem;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    input {
+      width: 100%;
+      padding: 0.6rem;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      margin-bottom: 1rem;
+    }
+    #results {
+      margin-top: 1.5rem;
+    }
+    .hashtag {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e3a8a;
+      padding: 0.4rem 0.8rem;
+      border-radius: 20px;
+      display: inline-block;
+      margin: 0.2rem;
+    }
+    footer {
+      margin-top: 2rem;
+      font-size: 0.9rem;
+      color: #6b7280;
+    }
+    #upgradeBanner {
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+      color: #92400e;
+      padding: 1rem;
+      border-radius: 8px;
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    #exportBtn {
+      margin-left: 1rem;
+      background: #059669;
+    }
+    #exportBtn:hover {
+      background: #047857;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📈 Hashtag Pulse</h1>
+    <div id="userStatus"><button id="loginBtn">Login with Whop</button></div>
+  </header>
+
+  <main>
+    <div id="upgradeBanner" style="display:none;"></div>
+
+    <input id="keywordInput" type="text" placeholder="Enter a topic, e.g. 'fitness'..." />
+    <button id="analyzeBtn">Analyze Hashtags</button>
+    <button id="exportBtn" style="display:none;">Export CSV</button>
+
+    <div id="results"></div>
+  </main>
+
+  <footer id="footer">
+    Free plan: 3 searches/day. <a href="#" id="upgradeLink">Upgrade to Pro</a> for unlimited access.
+  </footer>
+
+  <script>
+    // 🟦 Initialize Whop SDK
+    const whop = new Whop({ appId: "YOUR_APP_ID_HERE" });
+    let user = null;
+    let plan = "free";
+    let searchesToday = 0;
+    const maxFreeSearches = 3;
+
+    const loginBtn = document.getElementById("loginBtn");
+    const upgradeLink = document.getElementById("upgradeLink");
+    const upgradeBanner = document.getElementById("upgradeBanner");
+    const exportBtn = document.getElementById("exportBtn");
+    const footer = document.getElementById("footer");
+
+    // 🔐 Verify user + entitlements
+    async function verifyUser() {
+      try {
+        user = await whop.user();
+
+        if (!user) {
+          loginBtn.style.display = "inline-block";
+          return;
+        }
+
+        document.getElementById("userStatus").innerHTML = `<p>👤 ${user.name}</p>`;
+
+        const entitlement = user.entitlements.find(e => e.app_id === "YOUR_APP_ID_HERE");
+        plan = entitlement ? entitlement.product_tier : "free";
+
+        if (plan === "pro") {
+          exportBtn.style.display = "inline-block";
+          upgradeBanner.style.display = "none";
+          footer.textContent = "You are on the Pro plan ✅ Unlimited searches & CSV exports.";
+        } else {
+          exportBtn.style.display = "none";
+          upgradeBanner.style.display = "block";
+          upgradeBanner.innerHTML = `You're on the free plan — <strong>3 searches/day</strong>. <a href="#" id="upgradeInline">Upgrade to Pro</a>`;
+        }
+      } catch (err) {
+        console.error("Whop auth error:", err);
+      }
+    }
+
+    loginBtn.addEventListener("click", () => whop.auth.login());
+    document.addEventListener("click", (e) => {
+      if (e.target.id === "upgradeLink" || e.target.id === "upgradeInline") {
+        e.preventDefault();
+        whop.checkout.open({ productId: "YOUR_PRO_PRODUCT_ID_HERE" });
+      }
+    });
+
+    // 🔍 Analyze hashtags (mock logic for MVP)
+    document.getElementById("analyzeBtn").addEventListener("click", () => {
+      const keyword = document.getElementById("keywordInput").value.trim();
+      if (!keyword) return alert("Enter a topic!");
+
+      if (plan === "free" && searchesToday >= maxFreeSearches) {
+        return alert("Free plan limit reached. Upgrade to Pro for unlimited searches!");
+      }
+
+      searchesToday++;
+
+      const results = document.getElementById("results");
+      results.innerHTML = `<h3>Top Hashtags for "${keyword}"</h3>`;
+
+      // Mock hashtag generation
+      const tags = Array.from({length: 10}, (_, i) => 
+        `#${keyword.replace(/\s+/g, '')}${i+1}`
+      );
+
+      tags.forEach(tag => {
+        const span = document.createElement("span");
+        span.className = "hashtag";
+        span.textContent = tag;
+        results.appendChild(span);
+      });
+    });
+
+    // 📤 Export CSV (Pro users only)
+    exportBtn.addEventListener("click", () => {
+      const tags = [...document.querySelectorAll(".hashtag")].map(e => e.textContent);
+      if (tags.length === 0) return alert("No hashtags to export.");
+
+      const csv = "Hashtags\n" + tags.join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "hashtags.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+
+    // 🧠 Initialize app
+    verifyUser();
+  </script>
+</body>
+</html>
