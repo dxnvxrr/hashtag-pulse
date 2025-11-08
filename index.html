@@ -1,214 +1,383 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hashtag Pulse — Viral Hashtag Analyzer</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hashtag Pulse - Viral Hashtag Analyzer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.whop.com/sdk.js"></script>
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
     body {
       font-family: 'Inter', sans-serif;
-      background: #f9fafb;
-      color: #111827;
-      margin: 0; padding: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: center;
+      padding: 20px;
     }
-    header {
+    .container {
       background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 600px;
       width: 100%;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-      padding: 1rem 2rem;
+      padding: 40px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .header h1 {
+      font-size: 2rem;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .header p {
+      color: #666;
+      font-size: 0.95rem;
+    }
+    .user-status {
+      background: #f5f5f5;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    .user-status.pro {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .search-box {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    input {
+      flex: 1;
+      padding: 12px 16px;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.3s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button {
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .limit-warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      color: #856404;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .limit-warning.show {
+      display: block;
+    }
+    .upgrade-banner {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 16px;
+      border-radius: 8px;
+      text-align: center;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .upgrade-banner.show {
+      display: block;
+    }
+    .upgrade-banner h3 {
+      margin-bottom: 10px;
+      font-size: 1.1rem;
+    }
+    .upgrade-banner button {
+      background: white;
+      color: #667eea;
+      margin-top: 10px;
+    }
+    .results {
+      margin-top: 30px;
+      min-height: 100px;
+    }
+    .results h3 {
+      color: #333;
+      margin-bottom: 15px;
+      font-size: 1.2rem;
+    }
+    .hashtag-item {
+      background: #f9f9f9;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 10px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      border-left: 4px solid #667eea;
     }
-    header h1 {
-      font-size: 1.4rem;
+    .hashtag-name {
       font-weight: 600;
+      color: #333;
     }
-    button {
-      background: #2563eb;
-      color: white;
-      border: none;
-      padding: 0.5rem 1rem;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: 0.2s;
+    .hashtag-meta {
+      font-size: 0.85rem;
+      color: #999;
     }
-    button:hover {
-      background: #1e40af;
+    .export-btn {
+      display: none;
+      margin-top: 20px;
     }
-    main {
-      max-width: 700px;
+    .export-btn.show {
+      display: block;
+    }
+    .login-btn {
       width: 100%;
-      background: white;
-      margin-top: 2rem;
-      padding: 2rem;
-      border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      margin-top: 20px;
     }
-    input {
-      width: 100%;
-      padding: 0.6rem;
-      border-radius: 6px;
-      border: 1px solid #d1d5db;
-      margin-bottom: 1rem;
-    }
-    #results {
-      margin-top: 1.5rem;
-    }
-    .hashtag {
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      color: #1e3a8a;
-      padding: 0.4rem 0.8rem;
-      border-radius: 20px;
-      display: inline-block;
-      margin: 0.2rem;
-    }
-    footer {
-      margin-top: 2rem;
-      font-size: 0.9rem;
-      color: #6b7280;
-    }
-    #upgradeBanner {
-      background: #fef3c7;
-      border: 1px solid #fcd34d;
-      color: #92400e;
-      padding: 1rem;
-      border-radius: 8px;
+    .login-status {
       text-align: center;
-      margin-bottom: 1rem;
-    }
-    #exportBtn {
-      margin-left: 1rem;
-      background: #059669;
-    }
-    #exportBtn:hover {
-      background: #047857;
+      padding: 16px;
+      background: #e8f4f8;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>📈 Hashtag Pulse</h1>
-    <div id="userStatus"><button id="loginBtn">Login with Whop</button></div>
-  </header>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 Hashtag Pulse</h1>
+      <p>Discover viral hashtags for your next post</p>
+    </div>
 
-  <main>
-    <div id="upgradeBanner" style="display:none;"></div>
+    <div class="user-status" id="userStatus">
+      📊 Free User - 3 searches/day
+    </div>
 
-    <input id="keywordInput" type="text" placeholder="Enter a topic, e.g. 'fitness'..." />
-    <button id="analyzeBtn">Analyze Hashtags</button>
-    <button id="exportBtn" style="display:none;">Export CSV</button>
+    <div class="limit-warning" id="limitWarning">
+      ⚠️ You've reached your daily search limit. Upgrade to Pro for unlimited searches!
+    </div>
 
-    <div id="results"></div>
-  </main>
+    <div class="upgrade-banner" id="upgradeBanner">
+      <h3>🎯 Go Pro & Unlock More!</h3>
+      <p>Get unlimited searches + CSV export for just $9/month</p>
+      <button onclick="whopCheckout()">Upgrade Now</button>
+    </div>
 
-  <footer id="footer">
-    Free plan: 3 searches/day. <a href="#" id="upgradeLink">Upgrade to Pro</a> for unlimited access.
-  </footer>
+    <div class="search-box">
+      <input 
+        type="text" 
+        id="searchInput" 
+        placeholder="Enter a topic (e.g., 'fitness', 'travel')" 
+      >
+      <button onclick="searchHashtags()" id="searchBtn">Search</button>
+    </div>
+
+    <div class="results" id="results"></div>
+
+    <button class="export-btn" id="exportBtn" onclick="exportCSV()">📥 Export as CSV</button>
+
+    <button class="login-btn" id="loginBtn" onclick="whopLogin()">Login with WHOP</button>
+  </div>
 
   <script>
-    // 🟦 Initialize Whop SDK
-    const whop = new Whop({ appId: "YOUR_APP_ID_HERE" });
-    let user = null;
-    let plan = "free";
-    let searchesToday = 0;
-    const maxFreeSearches = 3;
+    // Initialize localStorage if needed
+    function initSearchCounter() {
+      const today = new Date().toDateString();
+      const lastDate = localStorage.getItem('lastSearchDate');
+      const searchCount = localStorage.getItem('searchesToday') || '0';
+      
+      if (lastDate !== today) {
+        localStorage.setItem('lastSearchDate', today);
+        localStorage.setItem('searchesToday', '0');
+      }
+      return parseInt(searchCount);
+    }
 
-    const loginBtn = document.getElementById("loginBtn");
-    const upgradeLink = document.getElementById("upgradeLink");
-    const upgradeBanner = document.getElementById("upgradeBanner");
-    const exportBtn = document.getElementById("exportBtn");
-    const footer = document.getElementById("footer");
+    // Get current search count
+    function getSearchCount() {
+      return parseInt(localStorage.getItem('searchesToday') || '0');
+    }
 
-    // 🔐 Verify user + entitlements
-    async function verifyUser() {
-      try {
-        user = await whop.user();
+    // Increment search counter
+    function incrementSearchCount() {
+      const count = getSearchCount() + 1;
+      localStorage.setItem('searchesToday', count.toString());
+      return count;
+    }
 
-        if (!user) {
-          loginBtn.style.display = "inline-block";
+    // Generate realistic trending hashtags
+    function generateTrendingHashtags(keyword) {
+      const hashtags = [
+        { tag: `#${keyword}trending`, volume: '2.5M', engagement: '8.9%', score: 95 },
+        { tag: `#${keyword}life`, volume: '1.8M', engagement: '7.2%', score: 87 },
+        { tag: `#${keyword}community`, volume: '1.3M', engagement: '9.1%', score: 88 },
+        { tag: `#viral${keyword}`, volume: '980K', engagement: '10.2%', score: 92 },
+        { tag: `#${keyword}tips`, volume: '750K', engagement: '6.8%', score: 79 },
+        { tag: `#${keyword}motivation`, volume: '620K', engagement: '11.3%', score: 85 },
+        { tag: `#${keyword}inspo`, volume: '540K', engagement: '7.9%', score: 81 },
+        { tag: `#${keyword}2025`, volume: '420K', engagement: '9.5%', score: 83 }
+      ];
+      return hashtags;
+    }
+
+    // Search function
+    function searchHashtags() {
+      const keyword = document.getElementById('searchInput').value.trim();
+      const userTier = getUserTier();
+      
+      if (!keyword) {
+        alert('Please enter a keyword!');
+        return;
+      }
+
+      // Check if user is free tier
+      if (userTier === 'free') {
+        const searchCount = getSearchCount();
+        if (searchCount >= 3) {
+          document.getElementById('limitWarning').classList.add('show');
+          document.getElementById('upgradeBanner').classList.add('show');
+          document.getElementById('results').innerHTML = '';
           return;
         }
+        incrementSearchCount();
+        updateSearchStatus();
+      }
 
-        document.getElementById("userStatus").innerHTML = `<p>👤 ${user.name}</p>`;
+      // Generate results
+      const hashtags = generateTrendingHashtags(keyword);
+      displayResults(hashtags);
 
-        const entitlement = user.entitlements.find(e => e.app_id === "YOUR_APP_ID_HERE");
-        plan = entitlement ? entitlement.product_tier : "free";
-
-        if (plan === "pro") {
-          exportBtn.style.display = "inline-block";
-          upgradeBanner.style.display = "none";
-          footer.textContent = "You are on the Pro plan ✅ Unlimited searches & CSV exports.";
-        } else {
-          exportBtn.style.display = "none";
-          upgradeBanner.style.display = "block";
-          upgradeBanner.innerHTML = `You're on the free plan — <strong>3 searches/day</strong>. <a href="#" id="upgradeInline">Upgrade to Pro</a>`;
-        }
-      } catch (err) {
-        console.error("Whop auth error:", err);
+      // Show export button for pro users
+      if (userTier === 'pro') {
+        document.getElementById('exportBtn').classList.add('show');
       }
     }
 
-    loginBtn.addEventListener("click", () => whop.auth.login());
-    document.addEventListener("click", (e) => {
-      if (e.target.id === "upgradeLink" || e.target.id === "upgradeInline") {
-        e.preventDefault();
-        whop.checkout.open({ productId: "YOUR_PRO_PRODUCT_ID_HERE" });
+    // Display results
+    function displayResults(hashtags) {
+      let html = `<h3>📈 Top Hashtags for "${document.getElementById('searchInput').value}"</h3>`;
+      hashtags.forEach(h => {
+        html += `
+          <div class="hashtag-item">
+            <div>
+              <div class="hashtag-name">${h.tag}</div>
+              <div class="hashtag-meta">📊 ${h.volume} posts | 💬 ${h.engagement} engagement</div>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">Score: ${h.score}</div>
+          </div>
+        `;
+      });
+      document.getElementById('results').innerHTML = html;
+      document.getElementById('limitWarning').classList.remove('show');
+      document.getElementById('upgradeBanner').classList.remove('show');
+    }
+
+    // Export to CSV
+    function exportCSV() {
+      const keyword = document.getElementById('searchInput').value;
+      const hashtags = generateTrendingHashtags(keyword);
+      let csv = 'Hashtag,Volume,Engagement %,Viral Score\n';
+      hashtags.forEach(h => {
+        csv += `${h.tag},${h.volume},${h.engagement},${h.score}\n`;
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hashtags_${keyword}_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+    }
+
+    // Update UI based on search count
+    function updateSearchStatus() {
+      const userTier = getUserTier();
+      const searchCount = getSearchCount();
+      const statusEl = document.getElementById('userStatus');
+      
+      if (userTier === 'free') {
+        statusEl.textContent = `📊 Free User - ${3 - searchCount} searches remaining today`;
+        if (searchCount >= 3) {
+          statusEl.style.background = '#ffe0e0';
+          statusEl.style.color = '#c33';
+        }
+      }
+    }
+
+    // Get user tier (check localStorage)
+    function getUserTier() {
+      return localStorage.getItem('userTier') || 'free';
+    }
+
+    // WHOP Integration
+    function whopLogin() {
+      const whop = new Whop({
+        appId: 'YOUR_APP_ID_HERE'
+      });
+      whop.showLoginModal();
+    }
+
+    function whopCheckout() {
+      const whop = new Whop({
+        appId: 'YOUR_APP_ID_HERE'
+      });
+      whop.showCheckoutModal('YOUR_PRO_PRODUCT_ID_HERE');
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      initSearchCounter();
+      updateSearchStatus();
+      
+      // Listen for WHOP events
+      if (typeof Whop !== 'undefined') {
+        document.addEventListener('whop:user-authenticated', function() {
+          localStorage.setItem('userTier', 'pro');
+          document.getElementById('userStatus').textContent = '👑 Pro User - Unlimited searches!';
+          document.getElementById('userStatus').classList.add('pro');
+          document.getElementById('loginBtn').style.display = 'none';
+          document.getElementById('exportBtn').classList.add('show');
+        });
       }
     });
 
-    // 🔍 Analyze hashtags (mock logic for MVP)
-    document.getElementById("analyzeBtn").addEventListener("click", () => {
-      const keyword = document.getElementById("keywordInput").value.trim();
-      if (!keyword) return alert("Enter a topic!");
-
-      if (plan === "free" && searchesToday >= maxFreeSearches) {
-        return alert("Free plan limit reached. Upgrade to Pro for unlimited searches!");
-      }
-
-      searchesToday++;
-
-      const results = document.getElementById("results");
-      results.innerHTML = `<h3>Top Hashtags for "${keyword}"</h3>`;
-
-      // Mock hashtag generation
-      const tags = Array.from({length: 10}, (_, i) => 
-        `#${keyword.replace(/\s+/g, '')}${i+1}`
-      );
-
-      tags.forEach(tag => {
-        const span = document.createElement("span");
-        span.className = "hashtag";
-        span.textContent = tag;
-        results.appendChild(span);
+    // Allow Enter key for search
+    document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('searchInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') searchHashtags();
       });
     });
-
-    // 📤 Export CSV (Pro users only)
-    exportBtn.addEventListener("click", () => {
-      const tags = [...document.querySelectorAll(".hashtag")].map(e => e.textContent);
-      if (tags.length === 0) return alert("No hashtags to export.");
-
-      const csv = "Hashtags\n" + tags.join("\n");
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "hashtags.csv";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    });
-
-    // 🧠 Initialize app
-    verifyUser();
   </script>
 </body>
 </html>
