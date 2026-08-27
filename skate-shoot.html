@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>SKATE+SHOOT greybox</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#14161c; touch-action:none; overscroll-behavior:none;
+    font-family:-apple-system,'Segoe UI',Roboto,sans-serif; color:#e8e8e8; -webkit-user-select:none; user-select:none; }
+  canvas { display:block; position:fixed; inset:0; }
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:2; }
+  .pad { padding:max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 8px max(10px, env(safe-area-inset-left)); }
+
+  #topbar { position:absolute; top:6px; left:50%; transform:translateX(-50%); text-align:center; }
+  #timer { font-size:26px; font-weight:800; letter-spacing:1px; }
+  #timer.ot { color:#ff5470; }
+  #roundLabel { font-size:11px; opacity:.6; }
+  #targetBar { width:150px; height:4px; background:#ffffff22; border-radius:2px; margin:3px auto 0; overflow:hidden; }
+  #targetFill { height:100%; width:0%; background:#3da9fc; }
+
+  #selfPanel { position:absolute; top:8px; left:10px; }
+  #mult { font-size:44px; font-weight:900; color:#9fd8ff; line-height:1; }
+  #mult.hot { color:#ffd166; }
+  #pending { font-size:13px; color:#ffd166; }
+  #banked { font-size:15px; font-weight:700; margin-top:2px; }
+  #trickFeed { font-size:11px; opacity:.75; margin-top:3px; max-width:180px; }
+
+  #oppPanel { position:absolute; top:8px; right:10px; text-align:right; font-size:13px; }
+  .oppRow { margin-bottom:2px; }
+  .oppDot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:6px; }
+  .oppMult { font-weight:800; font-size:15px; }
+
+  #ammoPanel { position:absolute; left:14px; bottom:calc(96px + env(safe-area-inset-bottom)); }
+  .pip { display:inline-block; width:13px; height:13px; border-radius:50%; border:2px solid #ffd166; margin-right:5px; }
+  .pip.full { background:#ffd166; }
+  #ammoProgBar { width:52px; height:3px; background:#ffffff22; margin-top:4px; border-radius:2px; overflow:hidden; }
+  #ammoProgFill { height:100%; width:0%; background:#ffd166; }
+
+  #drawBtn { position:absolute; left:14px; bottom:calc(14px + env(safe-area-inset-bottom)); width:74px; height:74px; border-radius:50%;
+    border:3px solid #ff5470; background:#ff547025; color:#ff8fa3; font-weight:900; font-size:15px;
+    pointer-events:auto; -webkit-tap-highlight-color:transparent; }
+  #drawBtn.ready { background:#ff5470cc; color:#fff; }
+  #drawBtn.aiming { border-color:#ffd166; background:#ffd166cc; color:#222; }
+
+  #balanceWrap { position:absolute; left:50%; bottom:calc(58px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+    width:130px; height:7px; background:#ffffff22; border-radius:4px; overflow:hidden; display:none; }
+  #balanceFill { height:100%; width:0%; background:#6fdc8c; }
+
+  #reticle { position:absolute; width:44px; height:44px; margin:-22px 0 0 -22px; border:2px solid #ffd166; border-radius:50%;
+    display:none; }
+  #reticle::after { content:''; position:absolute; left:50%; top:50%; width:4px; height:4px; margin:-2px 0 0 -2px;
+    background:#ffd166; border-radius:50%; }
+  #reticle.locked { border-color:#ff5470; box-shadow:0 0 12px #ff5470; }
+
+  #fps { position:absolute; bottom:calc(4px + env(safe-area-inset-bottom)); right:8px; font-size:11px; opacity:.55; font-variant-numeric:tabular-nums; }
+  #hint { position:absolute; bottom:calc(20px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    font-size:12px; opacity:.75; text-align:center; transition:opacity 1.2s; white-space:nowrap; }
+
+  #banner { position:absolute; top:26%; left:50%; transform:translate(-50%,-50%); font-size:34px; font-weight:900;
+    letter-spacing:2px; opacity:0; transition:opacity .25s; text-shadow:0 2px 12px #000; }
+
+  #gearBtn { position:absolute; right:10px; bottom:calc(30px + env(safe-area-inset-bottom)); width:40px; height:40px; border-radius:8px;
+    border:1px solid #ffffff44; background:#00000066; color:#fff; font-size:20px; pointer-events:auto; }
+  #panel { position:absolute; right:0; top:0; bottom:0; width:272px; background:#0e1015ee; border-left:1px solid #ffffff22;
+    padding:12px; overflow-y:auto; display:none; pointer-events:auto; font-size:12px; touch-action:pan-y; }
+  #panel h3 { font-size:13px; margin:10px 0 6px; color:#9fd8ff; }
+  .prow { margin-bottom:8px; }
+  .prow label { display:flex; justify-content:space-between; }
+  .prow .pv { color:#ffd166; font-weight:700; font-variant-numeric:tabular-nums; }
+  .prow input[type=range] { width:100%; }
+  .pcheck { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .pnote { opacity:.5; font-size:10px; }
+
+  #overlay { position:absolute; inset:0; background:#000000c8; display:none; pointer-events:auto;
+    flex-direction:column; align-items:center; justify-content:center; }
+  #overlay h1 { font-size:30px; margin-bottom:4px; }
+  #overlay .sub { opacity:.7; margin-bottom:16px; font-size:13px; }
+  #resultRows { min-width:280px; }
+  .resRow { display:flex; justify-content:space-between; padding:7px 12px; border-radius:6px; margin-bottom:5px;
+    background:#ffffff10; font-size:15px; }
+  .resRow.win { background:#3da9fc33; border:1px solid #3da9fc; }
+  #tapRestart { margin-top:22px; font-size:15px; font-weight:700; animation:blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity:.3; } }
+
+  .ftext { position:absolute; font-weight:900; font-size:17px; text-shadow:0 1px 6px #000; pointer-events:none;
+    animation:frise 1.3s ease-out forwards; white-space:nowrap; transform:translateX(-50%); }
+  .ftext.bad { color:#ff5470; }
+  .ftext.good { color:#6fdc8c; }
+  .ftext.gold { color:#ffd166; }
+  @keyframes frise { 0%{opacity:1;} 100%{opacity:0; margin-top:-56px;} }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="topbar" class="pad">
+    <div id="timer">3:00</div>
+    <div id="roundLabel">ROUND 1</div>
+    <div id="targetBar"><div id="targetFill"></div></div>
+  </div>
+  <div id="selfPanel" class="pad">
+    <div id="mult">0x</div>
+    <div id="pending"></div>
+    <div id="banked">0</div>
+    <div id="trickFeed"></div>
+  </div>
+  <div id="oppPanel" class="pad"></div>
+  <div id="ammoPanel"><span id="pips"></span><div id="ammoProgBar"><div id="ammoProgFill"></div></div></div>
+  <div id="balanceWrap"><div id="balanceFill"></div></div>
+  <div id="reticle"></div>
+  <div id="banner"></div>
+  <div id="hint">LEFT: drag steer &nbsp;·&nbsp; RIGHT: tap ollie · swipe grab/flip/spin · hold manual &nbsp;·&nbsp; DRAW banks combo &amp; arms gun</div>
+  <div id="fps"></div>
+  <button id="drawBtn">DRAW</button>
+  <button id="gearBtn">&#9881;</button>
+  <div id="panel"></div>
+  <div id="overlay"><h1 id="resTitle"></h1><div class="sub" id="resSub"></div><div id="resultRows"></div><div id="tapRestart">TAP TO START NEXT ROUND</div></div>
+</div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+/* ============================== TUNABLES ============================== */
+const CONFIG = {
+  // §12.8 core
+  DENIAL_K: 0.02,        // convex payout coefficient
+  DENIAL_SCALE: 100,     // avg trick base value; cut = mult^2 * K * SCALE (units fix, agreed)
+  AMMO_PER_MULT: 10,     // multiplier per round earned
+  DRAW_COMMIT_MS: 400,
+  AMMO_MAX: 3,
+  PROJECTILE_SPEED: 26,  // m/s — must be dodgeable
+  BAIL_RECOVERY_MS: 1500,
+  ROUND_SECONDS: 480,    // match cap ~8 min (applies at next round start)
+  AIM_MAGNETISM: 12,     // degrees of aim-assist cone
+  SCORE_TARGET: 150000,  // first to this banks the win (~4-5 min if played clean)
+  // toggles
+  BANK_ON_DRAW_START: true, // false = bank lands only after commit window (riskier draw)
+  HIDE_OPP_HUD: false,      // aura-only target selection test
+  // feel extras
+  AUTO_SPEED: 8.5,
+  TURN_RATE: 2.8,
+  BALANCE_BASE_MS: 4000,  // grind/manual balance window, shrinks as combo grows
+  COMBO_GAP_MS: 2000,
+  TIME_SCALE: 1,
+  // gesture thresholds
+  TAP_MS: 220, TAP_PX: 22, SWIPE_PX: 30, HOLD_MS: 260,
+};
+const TRICKS = { GRAB:100, FLIP:100, SPIN:150, GRIND_TICK:50, MANUAL_TICK:25 };
+const GRAVITY = 22, OLLIE_VY = 7.2, QP_LAUNCH_VY = 11;
+const GRIND_TICK_S = 0.6, MANUAL_TICK_S = 1.0;
+const BOT_AVG_BASE = 60; // bots' implied avg trick base: pending = 60 * mult^2
+
+/* ============================== THREE SETUP ============================== */
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d24);
+scene.fog = new THREE.Fog(0x1a1d24, 55, 110);
+const camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.1, 200);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(18, 30, 10); scene.add(sun);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const mat = c => new THREE.MeshLambertMaterial({ color:c });
+function box(w,h,d, c, x,y,z, ry=0){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat(c));
+  m.position.set(x,y,z); m.rotation.y = ry; scene.add(m); return m;
+}
+
+/* ============================== MAP (§12.2) ============================== */
+// ground
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(48,48), mat(0x3a3f4a));
+ground.rotation.x = -Math.PI/2; scene.add(ground);
+const grid = new THREE.GridHelper(48, 24, 0x4a5060, 0x454b58); grid.position.y = 0.01; scene.add(grid);
+// low border walls
+box(48,1,0.6,0x2c303a, 0,0.5, 23.7); box(0.6,1,48,0x2c303a, 23.7,0.5,0); box(0.6,1,48,0x2c303a, -23.7,0.5,0);
+
+// occluders (block bot line-of-sight + stop projectiles)
+const occluders = [], occAABBs = [];
+function occ(mesh){
+  occluders.push(mesh);
+  mesh.geometry.computeBoundingBox();
+  const bb = mesh.geometry.boundingBox.clone().translate(mesh.position);
+  occAABBs.push(bb); return mesh;
+}
+
+// THE RAIL — greed line, y 0.9, z -12..12, clear sightline down its length
+const RAIL = { a:new THREE.Vector3(0,0.9,-12), b:new THREE.Vector3(0,0.9,12) };
+RAIL.dir = RAIL.b.clone().sub(RAIL.a); RAIL.len = RAIL.dir.length(); RAIL.dir.normalize();
+box(0.12,0.1,24, 0xd9c360, 0,0.9,0);
+for(let z=-11; z<=11; z+=5.5) box(0.08,0.9,0.08, 0xa39037, 0,0.45,z);
+
+// QUARTERPIPE — back wall z<-17, approximated with angled slabs (greybox)
+{
+  const r = 3, W = 13;
+  for(let i=0;i<5;i++){
+    const a0 = i/5*Math.PI/2, a1 = (i+1)/5*Math.PI/2;
+    const z0 = -17 - r*Math.cos(a0), y0 = r - r*Math.sin(a0);
+    const z1 = -17 - r*Math.cos(a1), y1 = r - r*Math.sin(a1);
+    const len = Math.hypot(z1-z0, y1-y0);
+    const m = box(W, 0.18, len, 0x566b64, 0, (y0+y1)/2, (z0+z1)/2);
+    m.rotation.x = Math.atan2(y1-y0, -(z1-z0));
+  }
+  box(W,3,0.4,0x49594f, 0,1.5,-20.4);
+}
+
+// COVERED SAFE ROUTE — corridor on the -x side, no sightline in or out
+occ(box(0.8,2.8,28, 0x4a4f5c, -18.4,1.4,0));
+occ(box(0.8,2.8,28, 0x4a4f5c, -12.6,1.4,0));
+occ(box(6.6,0.25,28, 0x555b69, -15.5,2.9,0));
+
+// PERCH — raised platform overlooking the rail; reachable via ramp, no scoring lines on it
+const PERCH = { x0:12, x1:18, z0:-3, z1:3, h:3.6 };
+const RAMP = { x0:13, x1:17, z0:3, z1:12 };
+occ(box(6,0.3,6, 0x5a4f6b, 15,3.45,0));
+for(const [lx,lz] of [[12.4,-2.6],[17.6,-2.6],[12.4,2.6],[17.6,2.6]]) box(0.3,3.4,0.3, 0x453c52, lx,1.7,lz);
+{
+  const m = box(4,0.25,9.6, 0x5a4f6b, 15, 1.8, 7.5);
+  m.rotation.x = Math.atan2(PERCH.h, RAMP.z1-RAMP.z0);
+}
+
+// solid volumes the player slides along (XZ push-out while low)
+const solids = [
+  { x0:-18.8, x1:-18.0, z0:-14, z1:14, top:2.8 },   // corridor outer wall
+  { x0:-13.0, x1:-12.2, z0:-14, z1:14, top:2.8 },   // corridor inner wall
+  { x0:PERCH.x0, x1:PERCH.x1, z0:PERCH.z0, z1:PERCH.z1, top:PERCH.h }, // perch body (from side)
+];
+
+function groundHeight(x, z, curY){
+  if(x>=PERCH.x0 && x<=PERCH.x1 && z>=PERCH.z0 && z<=PERCH.z1 && curY > PERCH.h-0.7) return PERCH.h;
+  if(x>=RAMP.x0 && x<=RAMP.x1 && z>=RAMP.z0 && z<=RAMP.z1){
+    const rh = PERCH.h * (RAMP.z1 - z)/(RAMP.z1 - RAMP.z0);
+    if(curY > rh-0.9) return rh;
+  }
+  return 0;
+}
+function pushOut(p, y){
+  for(const s of solids){
+    if(y > s.top-0.2) continue;
+    if(p.x>s.x0-0.4 && p.x<s.x1+0.4 && p.z>s.z0-0.4 && p.z<s.z1+0.4){
+      const dxl=p.x-(s.x0-0.4), dxr=(s.x1+0.4)-p.x, dzl=p.z-(s.z0-0.4), dzr=(s.z1+0.4)-p.z;
+      const m = Math.min(dxl,dxr,dzl,dzr);
+      if(m===dxl) p.x=s.x0-0.4; else if(m===dxr) p.x=s.x1+0.4;
+      else if(m===dzl) p.z=s.z0-0.4; else p.z=s.z1+0.4;
+    }
+  }
+  p.x = Math.max(-23, Math.min(23, p.x));
+  p.z = Math.min(23, p.z);
+}
+function railProject(p){
+  const ax=RAIL.a.x, az=RAIL.a.z, dx=RAIL.b.x-ax, dz=RAIL.b.z-az;
+  let t = ((p.x-ax)*dx + (p.z-az)*dz) / (RAIL.len*RAIL.len);
+  t = Math.max(0, Math.min(1, t));
+  const qx = ax+dx*t, qz = az+dz*t;
+  return { t, d:Math.hypot(p.x-qx, p.z-qz) };
+}
+
+/* ============================== SKATERS ============================== */
+function makeSkaterMesh(color){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.8, 4, 10), mat(color));
+  body.position.y = 1.0; g.add(body);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.07, 0.95), mat(0x222630));
+  board.position.y = 0.32; g.add(board);
+  const aura = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.95, 28),
+    new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0, side:THREE.DoubleSide,
+      blending:THREE.AdditiveBlending, depthWrite:false }));
+  aura.rotation.x = -Math.PI/2; aura.position.y = 0.06; g.add(aura);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 6, 10, 1, true),
+    new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0,
+      blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
+  beam.position.y = 3.2; g.add(beam);
+  scene.add(g);
+  return { g, body, board, aura, beam };
+}
+
+const player = {
+  name:'YOU', color:0x3da9fc, colorCss:'#3da9fc',
+  pos:new THREE.Vector3(-4,0,16), heading:Math.PI, vy:0, airborne:false, qpAir:false,
+  state:'skate', bailUntil:0, grind:null, manual:null, trickEnd:0, trickName:null, animT:0, animKind:null,
+  combo:{ sum:0, count:0 }, lastTrickT:0, banked:0, denials:0,
+  ammo:0, ammoProg:0, drawPhase:null, phaseUntil:0, holdActive:false,
+  mesh: makeSkaterMesh(0x3da9fc),
+};
+const BOT_ROUTES = [
+  [[3,-14],[3,14],[-3,14],[-3,-14]],                       // rail-line orbiter
+  [[-15.5,-16],[-15.5,16],[-9,16],[-9,-16]],               // safe-route lurker
+  [[8,-18],[21,-6],[21,8],[8,16]],                         // wide loop past the perch
+];
+const bots = [0,1,2].map(i => ({
+  name:['BOT-A','BOT-B','BOT-C'][i],
+  color:[0xff8906,0xe53170,0x7f5af0][i], colorCss:['#ff8906','#e53170','#7f5af0'][i],
+  pos:new THREE.Vector3(BOT_ROUTES[i][0][0], 0, BOT_ROUTES[i][0][1]),
+  heading:0, speed:6.5+i*0.6, route:BOT_ROUTES[i], wp:1,
+  mult:0, banked:0, denials:0, ammo:0, ammoProg:0,
+  climbEvery:0, climbT:0, bankAt:0, aggroMin:8+i*4, shootCd:0,
+  bailUntil:0, drawPhase:null, phaseUntil:0,
+  mesh: makeSkaterMesh([0xff8906,0xe53170,0x7f5af0][i]),
+}));
+const skaters = [player, ...bots];
+
+/* ============================== PROJECTILES ============================== */
+const projPool = [];
+function makeProjMesh(color){
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8),
+    new THREE.MeshBasicMaterial({ color }));
+  scene.add(m); return m;
+}
+const projectiles = [];
+function fireProjectile(owner, origin, dir){
+  let p = projPool.pop();
+  if(!p){ p = { pos:new THREE.Vector3(), vel:new THREE.Vector3(), mesh:makeProjMesh(0xffffff) }; }
+  p.pos.copy(origin); p.vel.copy(dir).multiplyScalar(CONFIG.PROJECTILE_SPEED);
+  p.owner = owner; p.born = tNow; p.mesh.visible = true;
+  p.mesh.material.color.setHex(owner.color);
+  projectiles.push(p);
+}
+
+/* ============================== MATCH STATE ============================== */
+let tNow = 0, matchState = 'playing', timeLeft = CONFIG.ROUND_SECONDS, otStart = 0, roundNum = 1;
+
+/* ============================== SCORING / COMBO ============================== */
+function comboPending(){ return player.combo.sum * player.combo.count; }
+function grantAmmoProgress(s, n){
+  for(let i=0;i<n;i++){
+    if(s.ammo >= CONFIG.AMMO_MAX){ s.ammoProg = 0; return; }
+    s.ammoProg++;
+    if(s.ammoProg >= CONFIG.AMMO_PER_MULT){ s.ammoProg -= CONFIG.AMMO_PER_MULT; s.ammo++; }
+  }
+}
+let feed = [];
+function addTrick(name, base){
+  if(matchState === 'overtime' && player.combo.count === 0) return; // no new combos past the buzzer
+  player.combo.sum += base; player.combo.count++;
+  player.lastTrickT = tNow;
+  grantAmmoProgress(player, 1);
+  feed.unshift(name + ' +' + base); feed = feed.slice(0,3);
+  uiObj.trickFeed.textContent = feed.join(' · ');
+}
+function bank(s){
+  if(s === player){
+    const v = comboPending();
+    if(v > 0){ s.banked += v; floatText(s.pos, '+' + fmt(v), 'good'); }
+    s.combo.sum = 0; s.combo.count = 0; feed = []; uiObj.trickFeed.textContent = '';
+  } else {
+    const v = Math.round(BOT_AVG_BASE * s.mult * s.mult);
+    if(v > 0){ s.banked += v; floatText(s.pos, '+' + fmt(v), 'good'); }
+    s.mult = 0;
+  }
+  checkTarget(s);
+}
+function bail(s){
+  if(s === player){
+    const v = comboPending();
+    if(v > 0) floatText(s.pos, 'LOST ' + fmt(v), 'bad');
+    s.combo.sum = 0; s.combo.count = 0; feed = []; uiObj.trickFeed.textContent = '';
+    s.airborne = false; s.grind = null; s.manual = null; s.trickEnd = 0;
+    s.drawPhase = null; s.holdActive = false; s.vy = 0;
+    s.pos.y = groundHeight(s.pos.x, s.pos.z, s.pos.y);
+  } else {
+    if(s.mult > 0) floatText(s.pos, 'WIPED', 'bad');
+    s.mult = 0; s.drawPhase = null;
+  }
+  s.ammo = 0; s.ammoProg = 0;                    // gun lost with the run (§2.1)
+  s.bailUntil = tNow + CONFIG.BAIL_RECOVERY_MS/1000;
+  s.state = 'bail';
+}
+function hitSkater(victim, shooter){
+  const m = victim === player ? victim.combo.count : victim.mult;
+  const pend = victim === player ? comboPending() : Math.round(BOT_AVG_BASE*m*m);
+  const cut = Math.round(m*m * CONFIG.DENIAL_K * CONFIG.DENIAL_SCALE);
+  if(cut > 0){ shooter.banked += cut; floatText(shooter.pos, '+' + fmt(cut) + ' CUT', 'gold'); }
+  shooter.denials++;
+  if(pend > 0) banner((victim===player?'DENIED! −':'DENIAL! −') + fmt(pend), victim===player?'#ff5470':'#ffd166');
+  if(victim === player){ victim.combo.sum = 0; victim.combo.count = 0; } // destroyed, not banked
+  bail(victim);
+  checkTarget(shooter);
+}
+function checkTarget(s){
+  if(matchState !== 'ended' && s.banked >= CONFIG.SCORE_TARGET) endRound(s);
+}
+
+/* ============================== PLAYER ACTIONS ============================== */
+function ollie(){
+  if(player.state === 'bail' || player.drawPhase) return;
+  if(player.airborne) return;
+  if(player.grind){ exitGrind(true); return; }
+  if(player.manual) endManual();
+  player.vy = OLLIE_VY; player.airborne = true;
+  // plain ollie scores 0 — otherwise tap-spam farms ammo risk-free
+}
+function airTrick(kind){
+  if(!player.airborne || player.state === 'bail' || player.drawPhase) return;
+  if(tNow < player.trickEnd) return;
+  const spec = { GRAB:{d:0.35,n:'Grab'}, FLIP:{d:0.3,n:'Kickflip'}, SPIN:{d:0.5,n:'360 Spin'} }[kind];
+  player.trickEnd = tNow + spec.d; player.animKind = kind; player.animT = 0;
+  addTrick(spec.n, TRICKS[kind]);
+}
+function startManual(){
+  if(player.manual || player.airborne || player.grind || player.state==='bail' || player.drawPhase) return;
+  player.manual = { start:tNow, tickT:tNow };
+  addTrick('Manual', TRICKS.MANUAL_TICK);
+}
+function endManual(){ player.manual = null; player.lastTrickT = tNow; }
+function balanceWindowS(){
+  return Math.max(800, CONFIG.BALANCE_BASE_MS * Math.pow(0.97, player.combo.count)) / 1000;
+}
+function enterGrind(t){
+  player.grind = { t, dir: Math.sin(player.heading)*RAIL.dir.x + Math.cos(player.heading)*RAIL.dir.z >= 0 ? 1 : -1,
+                   start:tNow, tickT:tNow };
+  player.airborne = false; player.vy = 0; player.trickEnd = 0; player.animKind = null;
+  player.heading = Math.atan2(RAIL.dir.x*player.grind.dir, RAIL.dir.z*player.grind.dir);
+  addTrick('Grind', TRICKS.GRIND_TICK);
+}
+function exitGrind(withOllie){
+  player.grind = null;
+  player.pos.y = RAIL.a.y;
+  player.airborne = true; player.vy = withOllie ? OLLIE_VY : 3;
+  player.lastTrickT = tNow;
+}
+function tryDraw(){
+  if(matchState === 'ended' || player.state === 'bail' || player.drawPhase) return false;
+  if(player.ammo < 1){ banner('NO AMMO — SKATE', '#888'); return false; }
+  if(player.grind) exitGrind(false);
+  if(player.manual) endManual();
+  if(CONFIG.BANK_ON_DRAW_START) bank(player);
+  player.drawPhase = 'commit'; player.phaseUntil = tNow + CONFIG.DRAW_COMMIT_MS/1000;
+  return true;
+}
+const aim = { ndcX:0, ndcY:0.05, idleT:0, target:null };
+const _ray = new THREE.Raycaster(), _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+function enterAim(){
+  if(!CONFIG.BANK_ON_DRAW_START) bank(player);
+  player.drawPhase = 'aim'; aim.ndcX = 0; aim.ndcY = 0.05; aim.idleT = tNow; aim.target = null;
+}
+function exitShoot(){ player.drawPhase = null; uiObj.reticle.style.display = 'none'; }
+function fire(){
+  if(player.drawPhase !== 'aim' || player.ammo < 1) return;
+  player.ammo--;
+  const origin = _v1.copy(player.pos); origin.y += 1.2;
+  let dir;
+  if(aim.target && aimAngleTo(aim.target) < CONFIG.AIM_MAGNETISM){
+    const t = aim.target;
+    const dist = _v2.copy(t.pos).sub(player.pos).length();
+    const lead = dist / CONFIG.PROJECTILE_SPEED;
+    _v2.set(Math.sin(t.heading), 0, Math.cos(t.heading)).multiplyScalar(t.speed * lead);
+    _v3.copy(t.pos).add(_v2); _v3.y += 1.0;
+    dir = _v3.sub(origin).normalize();
+  } else {
+    _ray.setFromCamera({ x:aim.ndcX, y:aim.ndcY }, camera);
+    dir = _ray.ray.direction.clone();
+  }
+  fireProjectile(player, origin, dir);
+  exitShoot();
+}
+function aimAngleTo(bot){
+  _ray.setFromCamera({ x:aim.ndcX, y:aim.ndcY }, camera);
+  _v1.copy(bot.pos); _v1.y += 1.0; _v1.sub(_ray.ray.origin).normalize();
+  return THREE.MathUtils.radToDeg(Math.acos(Math.min(1, _ray.ray.direction.dot(_v1))));
+}
+
+/* ============================== PLAYER UPDATE ============================== */
+let steer = 0;
+function updatePlayer(dt){
+  const p = player;
+  if(p.state === 'bail'){
+    if(tNow >= p.bailUntil){ p.state = 'skate'; }
+    return;
+  }
+  if(p.drawPhase === 'commit' && tNow >= p.phaseUntil) enterAim();
+  if(p.drawPhase === 'aim'){
+    // magnetism drift + idle timeout
+    let best = null, bestA = 1e9;
+    for(const b of bots){
+      if(b.state === 'bail') continue;
+      const a = aimAngleTo(b);
+      if(a < bestA){ bestA = a; best = b; }
+    }
+    aim.target = (best && bestA < CONFIG.AIM_MAGNETISM) ? best : null;
+    if(aim.target){
+      _v1.copy(aim.target.pos); _v1.y += 1.0; _v1.project(camera);
+      aim.ndcX += (_v1.x - aim.ndcX) * Math.min(1, dt*7);
+      aim.ndcY += (_v1.y - aim.ndcY) * Math.min(1, dt*7);
+    }
+    if(tNow - aim.idleT > 2) exitShoot();
+  }
+
+  const fwdX = Math.sin(p.heading), fwdZ = Math.cos(p.heading);
+
+  if(p.grind){
+    const g = p.grind;
+    g.t += g.dir * CONFIG.AUTO_SPEED * dt / RAIL.len;
+    if(g.t <= 0 || g.t >= 1){ p.pos.x = RAIL.a.x + (RAIL.b.x-RAIL.a.x)*Math.max(0,Math.min(1,g.t));
+      p.pos.z = RAIL.a.z + (RAIL.b.z-RAIL.a.z)*Math.max(0,Math.min(1,g.t)); exitGrind(false); return; }
+    p.pos.x = RAIL.a.x + (RAIL.b.x-RAIL.a.x)*g.t;
+    p.pos.z = RAIL.a.z + (RAIL.b.z-RAIL.a.z)*g.t;
+    p.pos.y = RAIL.a.y;
+    if(tNow - g.tickT >= GRIND_TICK_S){ g.tickT += GRIND_TICK_S; addTrick('Grind', TRICKS.GRIND_TICK); }
+    if(tNow - g.start > balanceWindowS()){ bail(p); }
+    return;
+  }
+
+  if(p.airborne){
+    p.heading += steer * CONFIG.TURN_RATE * 0.45 * dt;
+    p.vy -= GRAVITY * dt;
+    p.pos.x += Math.sin(p.heading) * CONFIG.AUTO_SPEED * dt * (p.qpAir ? 0.25 : 1);
+    p.pos.z += Math.cos(p.heading) * CONFIG.AUTO_SPEED * dt * (p.qpAir ? 0.25 : 1);
+    p.pos.y += p.vy * dt;
+    // grind snap
+    if(p.vy < 0 && !p.drawPhase){
+      const rp = railProject(p.pos);
+      if(rp.d < 1.0 && Math.abs(p.pos.y - RAIL.a.y) < 0.5 && rp.t > 0.005 && rp.t < 0.995){
+        enterGrind(rp.t); return;
+      }
+    }
+    const h = groundHeight(p.pos.x, p.pos.z, p.pos.y);
+    if(p.pos.y <= h && p.vy < 0){
+      p.pos.y = h; p.airborne = false;
+      if(p.qpAir){ p.qpAir = false; p.heading += Math.PI; }
+      if(tNow < p.trickEnd){ bail(p); return; }        // landed mid-trick
+      p.lastTrickT = tNow;
+      if(p.holdActive) startManual();
+    }
+  } else {
+    p.heading += steer * CONFIG.TURN_RATE * dt;
+    p.pos.x += fwdX * CONFIG.AUTO_SPEED * dt;
+    p.pos.z += fwdZ * CONFIG.AUTO_SPEED * dt;
+    pushOut(p.pos, p.pos.y);
+    const h = groundHeight(p.pos.x, p.pos.z, p.pos.y);
+    if(h < p.pos.y - 0.7){ p.airborne = true; p.vy = 0; }   // rode off an edge
+    else p.pos.y = h;
+    // quarterpipe launch
+    if(p.pos.z < -16.6 && Math.abs(p.pos.x) < 7 && fwdZ < -0.5 && !p.drawPhase){
+      p.airborne = true; p.qpAir = true; p.vy = QP_LAUNCH_VY; p.pos.z = -16.6;
+    }
+    // manual
+    if(p.manual){
+      const m = p.manual;
+      if(tNow - m.tickT >= MANUAL_TICK_S){ m.tickT += MANUAL_TICK_S; addTrick('Manual', TRICKS.MANUAL_TICK); }
+      if(tNow - m.start > balanceWindowS()){ bail(p); return; }
+    } else if(p.combo.count > 0 && !p.drawPhase && tNow - p.lastTrickT > CONFIG.COMBO_GAP_MS/1000){
+      bank(p);                                           // combo ended clean → banks
+    }
+  }
+}
+
+/* ============================== BOTS (§12.6 minimum) ============================== */
+function rollBot(b){
+  b.climbEvery = 0.7 + Math.random()*1.1;
+  b.bankAt = 12 + Math.floor(Math.random()*24);
+}
+function losClear(b){
+  _v1.copy(b.pos); _v1.y += 1.2;
+  _v2.copy(player.pos); _v2.y += 1.2; _v2.sub(_v1);
+  const dist = _v2.length(); _v2.normalize();
+  _ray.set(_v1, _v2); _ray.far = dist;
+  return _ray.intersectObjects(occluders, false).length === 0;
+}
+function updateBot(b, dt){
+  if(b.state === 'bail'){ if(tNow >= b.bailUntil) b.state = 'skate'; return; }
+  if(b.drawPhase === 'commit'){
+    if(tNow >= b.phaseUntil){
+      b.drawPhase = null; b.ammo--;
+      // lead the player, with error
+      _v1.copy(b.pos); _v1.y += 1.2;
+      const dist = _v2.copy(player.pos).sub(b.pos).length();
+      const lead = dist / CONFIG.PROJECTILE_SPEED;
+      _v2.set(Math.sin(player.heading), 0, Math.cos(player.heading)).multiplyScalar(CONFIG.AUTO_SPEED*lead);
+      _v3.copy(player.pos).add(_v2);
+      _v3.x += (Math.random()-0.5)*2.4; _v3.z += (Math.random()-0.5)*2.4; _v3.y += 1.0;
+      fireProjectile(b, _v1, _v3.sub(_v1).normalize());
+      b.shootCd = tNow + 4 + Math.random()*5;
+    }
+    return; // committed: stands still, vulnerable
+  }
+  // move along fixed route
+  const wp = b.route[b.wp];
+  _v1.set(wp[0]-b.pos.x, 0, wp[1]-b.pos.z);
+  const d = _v1.length();
+  if(d < 1.2){ b.wp = (b.wp+1) % b.route.length; }
+  else {
+    const want = Math.atan2(_v1.x, _v1.z);
+    let dh = want - b.heading;
+    while(dh > Math.PI) dh -= 2*Math.PI; while(dh < -Math.PI) dh += 2*Math.PI;
+    b.heading += dh * Math.min(1, dt*5);
+    b.pos.x += Math.sin(b.heading) * b.speed * dt;
+    b.pos.z += Math.cos(b.heading) * b.speed * dt;
+  }
+  // combo accumulation
+  const canClimb = matchState === 'playing' || b.mult > 0;
+  if(canClimb){
+    b.climbT += dt;
+    if(b.climbT >= b.climbEvery){
+      b.climbT = 0; b.mult++;
+      grantAmmoProgress(b, 1);
+      if(b.mult >= b.bankAt){ bank(b); rollBot(b); }
+    }
+  }
+  // denial pressure
+  if(matchState !== 'ended' && b.ammo > 0 && tNow > b.shootCd && player.state !== 'bail'
+     && player.combo.count >= b.aggroMin && Math.random() < dt*0.8 && losClear(b)){
+    bank(b);                                            // symmetric cost: bot banks on draw too
+    b.drawPhase = 'commit'; b.phaseUntil = tNow + CONFIG.DRAW_COMMIT_MS/1000;
+  }
+}
+
+/* ============================== PROJECTILE UPDATE ============================== */
+function updateProjectiles(dt){
+  for(let i=projectiles.length-1; i>=0; i--){
+    const pr = projectiles[i];
+    pr.pos.addScaledVector(pr.vel, dt);
+    pr.mesh.position.copy(pr.pos);
+    let dead = (tNow - pr.born > 3) || pr.pos.y < 0;
+    if(!dead) for(const bb of occAABBs){
+      if(pr.pos.x>bb.min.x && pr.pos.x<bb.max.x && pr.pos.y>bb.min.y && pr.pos.y<bb.max.y
+        && pr.pos.z>bb.min.z && pr.pos.z<bb.max.z){ dead = true; break; }
+    }
+    if(!dead) for(const s of skaters){
+      if(s === pr.owner || s.state === 'bail') continue;
+      _v1.copy(s.pos); _v1.y += 1.0;
+      if(_v1.distanceTo(pr.pos) < 1.0){ hitSkater(s, pr.owner); dead = true; break; }
+    }
+    if(dead){ pr.mesh.visible = false; projPool.push(pr); projectiles.splice(i,1); }
+  }
+}
+
+/* ============================== ROUND FLOW ============================== */
+function playerBusy(){
+  if(matchState !== 'overtime')
+    return player.combo.count > 0 || player.airborne || !!player.grind || !!player.manual || !!player.drawPhase;
+  return player.combo.count > 0 || !!player.drawPhase; // in OT, empty-handed cruising isn't a live run
+}
+function botsBusy(){ return bots.some(b => b.mult > 0 || b.drawPhase); }
+function endRound(targetWinner){
+  matchState = 'ended';
+  exitShoot();
+  const ranked = [...skaters].sort((a,b) => b.banked - a.banked);
+  const winner = targetWinner || ranked[0];
+  uiObj.resTitle.textContent = winner === player ? 'YOU WIN' : winner.name + ' WINS';
+  uiObj.resTitle.style.color = winner.colorCss;
+  uiObj.resSub.textContent = targetWinner ? 'score target reached' : 'time!';
+  uiObj.resultRows.innerHTML = ranked.map(s =>
+    `<div class="resRow${s===winner?' win':''}"><span style="color:${s.colorCss}">${s.name}</span>` +
+    `<span>${fmt(s.banked)} · ${s.denials} denials</span></div>`).join('');
+  uiObj.overlay.style.display = 'flex';
+}
+function resetRound(){
+  roundNum++;
+  timeLeft = CONFIG.ROUND_SECONDS; matchState = 'playing';
+  player.pos.set(-4,0,16); player.heading = Math.PI; player.vy = 0;
+  player.airborne = false; player.qpAir = false; player.grind = null; player.manual = null;
+  player.state = 'skate'; player.combo.sum = 0; player.combo.count = 0;
+  player.banked = 0; player.denials = 0; player.ammo = 0; player.ammoProg = 0;
+  player.drawPhase = null; player.trickEnd = 0; player.holdActive = false;
+  feed = []; uiObj.trickFeed.textContent = '';
+  bots.forEach((b,i) => {
+    b.pos.set(b.route[0][0], 0, b.route[0][1]); b.wp = 1; b.heading = 0;
+    b.mult = 0; b.banked = 0; b.denials = 0; b.ammo = 0; b.ammoProg = 0;
+    b.state = 'skate'; b.drawPhase = null; b.shootCd = tNow + 3 + i*2; b.climbT = 0;
+    rollBot(b);
+  });
+  for(const pr of projectiles){ pr.mesh.visible = false; projPool.push(pr); }
+  projectiles.length = 0;
+  uiObj.overlay.style.display = 'none';
+}
+bots.forEach((b,i) => { rollBot(b); b.shootCd = 5 + i*3; });
+
+/* ============================== INPUT ============================== */
+const touches = new Map(); // id -> {zone, x0,y0,t0, x,y, consumed}
+const cv = renderer.domElement;
+function px(t){ return t.clientX; } function py(t){ return t.clientY; }
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    const zone = px(t) < innerWidth*0.42 ? 'L' : 'R';
+    touches.set(t.identifier, { zone, x0:px(t), y0:py(t), t0:tNow, x:px(t), y:py(t), consumed:null });
+    if(zone === 'R' && player.drawPhase === 'aim'){
+      touches.get(t.identifier).consumed = 'aim'; aim.idleT = tNow;
+    }
+  }
+}, { passive:false });
+cv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    const rec = touches.get(t.identifier); if(!rec) continue;
+    const dx = px(t) - rec.x, dy = py(t) - rec.y;
+    rec.x = px(t); rec.y = py(t);
+    if(rec.consumed === 'aim'){
+      aim.ndcX = Math.max(-1, Math.min(1, aim.ndcX + dx/innerWidth * 2.4));
+      aim.ndcY = Math.max(-1, Math.min(1, aim.ndcY - dy/innerHeight * 2.4));
+      aim.idleT = tNow; continue;
+    }
+    if(rec.zone === 'R' && !rec.consumed){
+      const tx = rec.x - rec.x0, ty = rec.y - rec.y0;
+      if(Math.hypot(tx,ty) >= CONFIG.SWIPE_PX){
+        rec.consumed = 'swipe';
+        if(Math.abs(ty) >= Math.abs(tx)) airTrick(ty < 0 ? 'GRAB' : 'FLIP');
+        else airTrick('SPIN');
+      }
+    }
+  }
+}, { passive:false });
+function touchEnd(e){
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    const rec = touches.get(t.identifier); if(!rec) continue;
+    touches.delete(t.identifier);
+    if(rec.consumed === 'aim'){ fire(); continue; }
+    if(rec.zone === 'L'){ continue; }
+    if(rec.consumed === 'hold'){ player.holdActive = false; if(player.manual) endManual(); continue; }
+    if(!rec.consumed && tNow - rec.t0 < CONFIG.TAP_MS/1000
+       && Math.hypot(rec.x-rec.x0, rec.y-rec.y0) < CONFIG.TAP_PX) ollie();
+  }
+}
+cv.addEventListener('touchend', touchEnd, { passive:false });
+cv.addEventListener('touchcancel', touchEnd, { passive:false });
+
+// keyboard fallback
+const keys = new Set();
+addEventListener('keydown', e => {
+  if(e.repeat) return; keys.add(e.code);
+  if(matchState === 'ended' && (e.code === 'Enter' || e.code === 'Space')){ resetRound(); return; }
+  switch(e.code){
+    case 'Space': ollie(); break;
+    case 'KeyI': airTrick('GRAB'); break;
+    case 'KeyK': airTrick('FLIP'); break;
+    case 'KeyJ': case 'KeyL': airTrick('SPIN'); break;
+    case 'KeyM': player.holdActive = true; if(!player.airborne) startManual(); break;
+    case 'KeyF': tryDraw(); break;
+  }
+});
+addEventListener('keyup', e => {
+  keys.delete(e.code);
+  if(e.code === 'KeyM'){ player.holdActive = false; if(player.manual) endManual(); }
+});
+addEventListener('mousemove', e => {
+  if(player.drawPhase === 'aim'){
+    aim.ndcX = (e.clientX/innerWidth)*2 - 1;
+    aim.ndcY = -((e.clientY/innerHeight)*2 - 1);
+    aim.idleT = tNow;
+  }
+});
+addEventListener('mousedown', e => {
+  if(e.target.closest('#panel,#gearBtn,#drawBtn,#overlay')) return;
+  if(player.drawPhase === 'aim'){ aim.idleT = tNow; fire(); }
+});
+
+/* ============================== HUD ============================== */
+const uiObj = {};
+for(const id of ['timer','roundLabel','targetFill','mult','pending','banked','trickFeed','oppPanel',
+  'pips','ammoProgFill','drawBtn','balanceWrap','balanceFill','reticle','fps','hint','banner',
+  'gearBtn','panel','overlay','resTitle','resSub','resultRows']) uiObj[id] = document.getElementById(id);
+
+const fmt = n => n.toLocaleString('en-US');
+let bannerTimer = 0;
+function banner(text, color){
+  uiObj.banner.textContent = text; uiObj.banner.style.color = color || '#fff';
+  uiObj.banner.style.opacity = 1; bannerTimer = tNow + 1.4;
+}
+const hudLayer = document.getElementById('hud');
+function floatText(worldPos, str, cls){
+  _v1.copy(worldPos); _v1.y += 2.2; _v1.project(camera);
+  if(_v1.z > 1) return;
+  const d = document.createElement('div');
+  d.className = 'ftext ' + cls; d.textContent = str;
+  d.style.left = ((_v1.x*0.5+0.5)*innerWidth) + 'px';
+  d.style.top = ((-_v1.y*0.5+0.5)*innerHeight) + 'px';
+  hudLayer.appendChild(d);
+  d.addEventListener('animationend', () => d.remove());
+}
+
+uiObj.drawBtn.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); tryDraw(); }, { passive:false });
+uiObj.drawBtn.addEventListener('mousedown', e => { e.stopPropagation(); tryDraw(); });
+uiObj.overlay.addEventListener('touchend', e => { e.preventDefault(); resetRound(); }, { passive:false });
+uiObj.overlay.addEventListener('click', () => resetRound());
+uiObj.gearBtn.addEventListener('click', () => {
+  uiObj.panel.style.display = uiObj.panel.style.display === 'block' ? 'none' : 'block';
+});
+uiObj.gearBtn.addEventListener('touchstart', e => e.stopPropagation(), { passive:true });
+for(const ev of ['touchstart','touchmove','touchend']) uiObj.panel.addEventListener(ev, e => e.stopPropagation(), { passive:true });
+
+setTimeout(() => uiObj.hint.style.opacity = 0, 11000);
+
+let lastOppHtml = '', lastPipsHtml = '';
+function updateHUD(){
+  const c = player.combo;
+  uiObj.mult.textContent = c.count + 'x';
+  uiObj.mult.className = c.count >= 15 ? 'hot' : '';
+  uiObj.pending.textContent = c.count > 0 ? '+' + fmt(comboPending()) + ' at risk' : '';
+  uiObj.banked.textContent = fmt(player.banked);
+  uiObj.targetFill.style.width = Math.min(100, player.banked/CONFIG.SCORE_TARGET*100) + '%';
+  // timer
+  if(matchState === 'overtime'){ uiObj.timer.textContent = 'OT'; uiObj.timer.className = 'ot'; }
+  else {
+    const s = Math.max(0, Math.ceil(timeLeft));
+    uiObj.timer.textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    uiObj.timer.className = timeLeft < 30 ? 'ot' : '';
+  }
+  uiObj.roundLabel.textContent = 'ROUND ' + roundNum;
+  // opponents sorted by live multiplier (innerHTML only on change — keeps DOM churn off the frame budget)
+  const oppHtml = CONFIG.HIDE_OPP_HUD
+    ? '<span style="opacity:.4;font-size:10px">HUD hidden — read the auras</span>'
+    : [...bots].sort((a,b) => b.mult - a.mult).map(b =>
+      `<div class="oppRow"><span style="opacity:.7">${fmt(b.banked)}</span> <span class="oppMult" style="color:${b.colorCss}">${b.mult}x</span><span class="oppDot" style="background:${b.colorCss}"></span></div>`).join('');
+  if(oppHtml !== lastOppHtml){ uiObj.oppPanel.innerHTML = oppHtml; lastOppHtml = oppHtml; }
+  // ammo
+  let pipsHtml = '';
+  for(let i=0;i<CONFIG.AMMO_MAX;i++) pipsHtml += `<span class="pip${i<player.ammo?' full':''}"></span>`;
+  if(pipsHtml !== lastPipsHtml){ uiObj.pips.innerHTML = pipsHtml; lastPipsHtml = pipsHtml; }
+  uiObj.ammoProgFill.style.width = (player.ammo >= CONFIG.AMMO_MAX ? 100 : player.ammoProg/CONFIG.AMMO_PER_MULT*100) + '%';
+  // draw button
+  uiObj.drawBtn.className = player.drawPhase ? 'aiming' : (player.ammo > 0 ? 'ready' : '');
+  uiObj.drawBtn.textContent = player.drawPhase === 'aim' ? 'AIM' : 'DRAW';
+  // balance bar
+  const bal = player.grind || player.manual;
+  uiObj.balanceWrap.style.display = bal ? 'block' : 'none';
+  if(bal){
+    const f = Math.min(1, (tNow - bal.start)/balanceWindowS());
+    uiObj.balanceFill.style.width = (f*100) + '%';
+    uiObj.balanceFill.style.background = f > 0.7 ? '#ff5470' : '#6fdc8c';
+  }
+  // reticle
+  if(player.drawPhase === 'aim'){
+    uiObj.reticle.style.display = 'block';
+    uiObj.reticle.style.left = ((aim.ndcX*0.5+0.5)*innerWidth) + 'px';
+    uiObj.reticle.style.top = ((-aim.ndcY*0.5+0.5)*innerHeight) + 'px';
+    uiObj.reticle.className = aim.target ? 'locked' : '';
+  } else uiObj.reticle.style.display = 'none';
+  if(bannerTimer && tNow > bannerTimer){ uiObj.banner.style.opacity = 0; bannerTimer = 0; }
+}
+
+/* ============================== DEBUG PANEL (§12.8) ============================== */
+const PANEL_SPEC = [
+  ['— §12.8 core —'],
+  ['DENIAL_K', 0, 0.1, 0.005],
+  ['DENIAL_SCALE', 0, 300, 10],
+  ['AMMO_PER_MULT', 1, 30, 1],
+  ['DRAW_COMMIT_MS', 0, 1500, 50],
+  ['AMMO_MAX', 1, 6, 1],
+  ['PROJECTILE_SPEED', 5, 60, 1],
+  ['BAIL_RECOVERY_MS', 0, 4000, 100],
+  ['ROUND_SECONDS', 60, 900, 30, '(next round)'],
+  ['AIM_MAGNETISM', 0, 30, 1],
+  ['SCORE_TARGET', 20000, 500000, 5000],
+  ['— toggles —'],
+  ['BANK_ON_DRAW_START'],
+  ['HIDE_OPP_HUD'],
+  ['— feel —'],
+  ['AUTO_SPEED', 4, 14, 0.5],
+  ['BALANCE_BASE_MS', 1000, 8000, 250],
+  ['COMBO_GAP_MS', 500, 5000, 100],
+  ['TIME_SCALE', 0.1, 1, 0.05, 'slow-mo to observe commit window'],
+  ['— gestures —'],
+  ['TAP_MS', 100, 400, 10],
+  ['SWIPE_PX', 10, 80, 2],
+  ['HOLD_MS', 150, 600, 10],
+];
+{
+  let html = '';
+  for(const row of PANEL_SPEC){
+    if(row.length === 1 && row[0].startsWith('—')){ html += `<h3>${row[0]}</h3>`; continue; }
+    const k = row[0];
+    if(typeof CONFIG[k] === 'boolean'){
+      html += `<div class="pcheck"><input type="checkbox" id="pc_${k}" ${CONFIG[k]?'checked':''}><label for="pc_${k}">${k}</label></div>`;
+    } else {
+      const [,min,max,step,note] = row;
+      html += `<div class="prow"><label>${k} <span class="pv" id="pv_${k}">${CONFIG[k]}</span></label>` +
+        `<input type="range" id="pr_${k}" min="${min}" max="${max}" step="${step}" value="${CONFIG[k]}">` +
+        (note ? `<div class="pnote">${note}</div>` : '') + `</div>`;
+    }
+  }
+  uiObj.panel.innerHTML = html;
+  for(const row of PANEL_SPEC){
+    const k = row[0]; if(k.startsWith('—')) continue;
+    if(typeof CONFIG[k] === 'boolean'){
+      document.getElementById('pc_'+k).addEventListener('change', e => { CONFIG[k] = e.target.checked; });
+    } else {
+      document.getElementById('pr_'+k).addEventListener('input', e => {
+        CONFIG[k] = parseFloat(e.target.value);
+        document.getElementById('pv_'+k).textContent = CONFIG[k];
+      });
+    }
+  }
+}
+
+/* ============================== VISUAL SYNC ============================== */
+function syncSkaterMesh(s, dt){
+  const M = s.mesh;
+  M.g.position.copy(s.pos);
+  M.g.rotation.y = s.heading;
+  const bailing = s.state === 'bail';
+  M.body.rotation.z = bailing ? Math.PI/2 : 0;
+  M.body.position.y = bailing ? 0.4 : 1.0;
+  // player trick animation
+  if(s === player){
+    if(s.animKind && tNow < s.trickEnd){
+      const spec = { GRAB:0.35, FLIP:0.3, SPIN:0.5 }[s.animKind];
+      const f = 1 - (s.trickEnd - tNow)/spec;
+      if(s.animKind === 'FLIP') M.board.rotation.z = f*Math.PI*2;
+      else if(s.animKind === 'SPIN') M.g.rotation.y = s.heading + f*Math.PI*2;
+      else { M.body.rotation.x = -0.5*Math.sin(f*Math.PI); M.board.rotation.x = 0.4*Math.sin(f*Math.PI); }
+    } else if(!bailing){ M.board.rotation.set(0,0,0); M.body.rotation.x = 0; }
+    if(s.manual) M.g.rotation.x = -0.28; else M.g.rotation.x = 0;
+    // commit-window vulnerability flash
+    const flash = s.drawPhase === 'commit' && Math.sin(tNow*40) > 0;
+    M.body.material.color.setHex(flash ? 0xffffff : s.color);
+  } else {
+    const flash = s.drawPhase === 'commit' && Math.sin(tNow*40) > 0;
+    M.body.material.color.setHex(flash ? 0xffffff : s.color);
+  }
+  // aura — intensity scales with live multiplier (§12.7)
+  const m = s === player ? s.combo.count : s.mult;
+  const pulse = 1 + 0.08*Math.sin(tNow*(3 + m*0.15));
+  const sc = (1 + Math.min(m,50)*0.055) * pulse;
+  M.aura.scale.set(sc, sc, 1);
+  M.aura.material.opacity = Math.min(0.85, m*0.045);
+  M.beam.material.opacity = Math.min(0.28, Math.max(0, m-8)*0.012);
+  M.beam.scale.set(1, 1 + m*0.02, 1);
+}
+
+/* ============================== MAIN LOOP ============================== */
+let lastT = performance.now(), fpsEMA = 60;
+const camTarget = new THREE.Vector3(), camPos = new THREE.Vector3(-4, 4, 24);
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.05, (now - lastT)/1000); lastT = now;
+  fpsEMA += ((1/Math.max(dt,1e-4)) - fpsEMA) * 0.05;
+  dt *= CONFIG.TIME_SCALE;
+  tNow += dt;
+
+  // keyboard steer
+  let ks = 0;
+  if(keys.has('ArrowLeft') || keys.has('KeyA')) ks -= 1;
+  if(keys.has('ArrowRight') || keys.has('KeyD')) ks += 1;
+  // touch steer
+  let ts = 0;
+  for(const rec of touches.values())
+    if(rec.zone === 'L') ts = Math.max(-1, Math.min(1, (rec.x - rec.x0)/60));
+  steer = ks !== 0 ? ks : ts;
+  // touch hold → manual
+  for(const rec of touches.values()){
+    if(rec.zone === 'R' && !rec.consumed && tNow - rec.t0 > CONFIG.HOLD_MS/1000
+       && Math.hypot(rec.x-rec.x0, rec.y-rec.y0) < CONFIG.TAP_PX){
+      rec.consumed = 'hold'; player.holdActive = true;
+      if(!player.airborne && !player.grind) startManual();
+    }
+  }
+
+  if(matchState !== 'ended'){
+    updatePlayer(dt);
+    for(const b of bots) updateBot(b, dt);
+    updateProjectiles(dt);
+    // clock — combo timer keeps running past the buzzer (§3)
+    if(matchState === 'playing'){
+      timeLeft -= dt;
+      if(timeLeft <= 0){
+        if(playerBusy() || botsBusy()){
+          matchState = 'overtime'; otStart = tNow;
+          bots.forEach(b => { if(b.mult > 0) b.bankAt = Math.min(b.bankAt, b.mult + 2); }); // wrap up fast
+          banner('OVERTIME — LAND IT', '#ffd166');
+        } else endRound();
+      }
+    } else if(matchState === 'overtime'){
+      if(!playerBusy() && !botsBusy()) endRound();
+      else if(tNow - otStart > 20){ bank(player); bots.forEach(b => b.mult > 0 && bank(b)); if(matchState !== 'ended') endRound(); }
+    }
+  }
+
+  for(const s of skaters) syncSkaterMesh(s, dt);
+
+  // camera
+  const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
+  const aiming = player.drawPhase === 'aim';
+  camTarget.set(player.pos.x - fx*(aiming?5.2:7.5), player.pos.y + (aiming?2.6:3.8), player.pos.z - fz*(aiming?5.2:7.5));
+  camPos.lerp(camTarget, Math.min(1, dt*5));
+  camera.position.copy(camPos);
+  _v1.set(player.pos.x + fx*3, player.pos.y + 1.2, player.pos.z + fz*3);
+  camera.lookAt(_v1);
+
+  updateHUD();
+  uiObj.fps.textContent = Math.round(fpsEMA) + ' fps';
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+
+/* ============================== TEST API ============================== */
+window.GAME = {
+  CONFIG, player, bots, projectiles,
+  addTrick, bank: () => bank(player), bail: s => bail(s || player), tryDraw, fire, enterAim,
+  hitSkater, fireProjectile, resetRound, endRound,
+  getState: () => matchState, getTime: () => tNow, getTimeLeft: () => timeLeft,
+  getFps: () => fpsEMA, ollie, airTrick, startManual,
+  shootBot: i => {                     // fire a guaranteed test shot at bot i
+    const b = bots[i];
+    _v1.copy(player.pos); _v1.y += 1.2;
+    _v2.copy(b.pos); _v2.y += 1.0;
+    fireProjectile(player, _v1, _v2.sub(_v1).normalize());
+  },
+};
+</script>
+</body>
+</html>
