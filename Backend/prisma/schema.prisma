@@ -1,0 +1,277 @@
+// One More Tap — production PostgreSQL schema.
+// Balance non-negativity is enforced by CHECK constraints in the initial migration
+// (Prisma cannot express CHECK constraints in the schema language).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  QUARANTINED
+  BANNED
+  PENDING_DELETION
+}
+
+enum Platform {
+  IOS
+  ANDROID
+  EDITOR
+}
+
+enum IdentityProvider {
+  APPLE
+  GOOGLE_PLAY_GAMES
+}
+
+enum Currency {
+  TICKS
+  CORES
+  SLOWMO_TICKETS
+  ANCHORS
+}
+
+enum TransactionReason {
+  RUN_REWARD
+  IAP_PURCHASE
+  AD_REWARD
+  ITEM_PURCHASE
+  ACCOUNT_MERGE
+  ADMIN_ADJUSTMENT
+  REFUND_REVERSAL
+}
+
+enum Store {
+  APP_STORE
+  GOOGLE_PLAY
+}
+
+enum PurchaseStatus {
+  VERIFIED
+  REJECTED
+  REFUNDED
+}
+
+enum RunMode {
+  PULSE
+  GAUNTLET
+  DUEL
+  ZEN
+}
+
+enum RunStatus {
+  ACTIVE
+  VALIDATED
+  QUARANTINED
+  REJECTED
+  EXPIRED
+}
+
+enum AdRewardStatus {
+  PENDING
+  GRANTED
+  EXPIRED
+}
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  status          UserStatus @default(ACTIVE)
+  /// ELO-like precision rating, 0–3000.
+  precisionRating Int        @default(1000)
+  /// Best single-tap delta in microseconds (lower is better).
+  bestDeltaUs     Int?
+  /// COPPA: under-13 accounts get no personalised ads, no social, minimal telemetry.
+  isMinor         Boolean    @default(false)
+  /// Set once the player answers the age gate; afterwards isMinor can only become stricter.
+  ageGateAnsweredAt DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletionRequestedAt DateTime?
+
+  wallet        Wallet?
+  devices       Device[]
+  identities    Identity[]
+  refreshTokens RefreshToken[]
+  transactions  Transaction[]
+  purchases     Purchase[]
+  runs          Run[]
+  adRewards     AdReward[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Device {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  /// HMAC-SHA256(pepper, client fingerprint). The raw fingerprint is never stored.
+  fingerprintHash String   @unique @db.VarChar(64)
+  platform        Platform
+  model           String   @db.VarChar(128)
+  createdAt       DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model Identity {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  provider  IdentityProvider
+  /// Stable subject from the provider (Apple `sub`, Google Play Games player id).
+  subject   String           @db.VarChar(255)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("identities")
+}
+
+model RefreshToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  deviceId    String    @db.Uuid
+  /// SHA-256 of the opaque refresh token. Plaintext is only ever held by the client.
+  tokenHash   String    @unique @db.VarChar(64)
+  /// Rotation family: reuse of a rotated token revokes the whole family.
+  familyId    String    @db.Uuid
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  rotatedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Wallet {
+  userId        String   @id @db.Uuid
+  /// Soft currency.
+  ticks         BigInt   @default(0)
+  /// Hard currency.
+  cores         BigInt   @default(0)
+  slowMoTickets Int      @default(3)
+  anchors       Int      @default(0)
+  /// Optimistic-concurrency counter, incremented on every mutation.
+  version       Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+/// Append-only ledger. Every wallet mutation writes exactly one row per currency touched.
+model Transaction {
+  id             String            @id @default(uuid()) @db.Uuid
+  userId         String            @db.Uuid
+  currency       Currency
+  /// Signed delta (credit > 0, debit < 0).
+  amount         BigInt
+  balanceAfter   BigInt
+  reason         TransactionReason
+  /// Unique per logical operation, e.g. "run:<runId>:TICKS" — makes grants idempotent.
+  idempotencyKey String            @unique @db.VarChar(200)
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("transactions")
+}
+
+model Purchase {
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @db.Uuid
+  store              Store
+  productId          String         @db.VarChar(128)
+  storeTransactionId String         @db.VarChar(255)
+  status             PurchaseStatus
+  environment        String         @db.VarChar(32)
+  verifiedPayload    Json?
+  createdAt          DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([store, storeTransactionId])
+  @@index([userId])
+  @@map("purchases")
+}
+
+model Run {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  mode         RunMode
+  /// uint32 PRNG seed stored as bigint.
+  seed         BigInt
+  status       RunStatus @default(ACTIVE)
+  baseDurationMs Int
+  /// First-ever run: ring 0 gets the generous FTUE window.
+  ftue         Boolean   @default(false)
+  startedAt    DateTime  @default(now())
+  submittedAt  DateTime?
+  ringsPlayed  Int       @default(0)
+  perfects     Int       @default(0)
+  cleans       Int       @default(0)
+  closes       Int       @default(0)
+  misses       Int       @default(0)
+  totalDeltaUs BigInt    @default(0)
+  bestDeltaUs  Int?
+  ticksAwarded Int       @default(0)
+  flags        String[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([status])
+  @@map("runs")
+}
+
+model AdReward {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @db.Uuid
+  placement      String         @db.VarChar(64)
+  status         AdRewardStatus @default(PENDING)
+  /// Ad network's event id from the S2S callback — dedupes network retries.
+  networkEventId String?        @unique @db.VarChar(128)
+  createdAt      DateTime       @default(now())
+  expiresAt      DateTime
+  grantedAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("ad_rewards")
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    String?  @db.Uuid
+  action    String   @db.VarChar(64)
+  severity  String   @db.VarChar(16)
+  ip        String?  @db.VarChar(64)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
