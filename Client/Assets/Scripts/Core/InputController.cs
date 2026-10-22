@@ -36,23 +36,22 @@ namespace OneMoreTap.Core
     /// Single-tap-anywhere input (GDD Pillar 1) on the New Input System.
     ///
     /// Tap fires on press-down, never on release: waiting for release would add the whole contact time to every
-    /// tap's error. Long-press is reported separately once the hold threshold passes; see the design note on
-    /// <see cref="LongPressed"/>.
+    /// tap's error. That makes the GDD's long-press Slow-Mo gesture impossible without breaking taps (every long
+    /// press starts as a tap), so Slow-Mo is a dedicated corner button: presses inside <see cref="_slowMoZone"/>
+    /// raise <see cref="SlowMoPressed"/> and never count as ring taps.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class InputController : MonoBehaviour
     {
-        [SerializeField, Range(0.15f, 1f)] private float _longPressSeconds = 0.35f;
         [SerializeField] private bool _hapticsEnabled = true;
+        [Tooltip("Slow-Mo button area in normalized screen space (0..1, bottom-left origin). Presses here never tap the ring.")]
+        [SerializeField] private Rect _slowMoZone = new Rect(0.72f, 0.0f, 0.28f, 0.12f);
 
         /// <summary>Press-down. The gameplay layer resolves the verdict from <see cref="PointerSample.EventTime"/>.</summary>
         public event Action<PointerSample> Tapped;
         public event Action<PointerSample> Released;
-        /// <summary>
-        /// Hold passed the threshold (Slow-Mo Ticket gesture). The press already produced a Tapped event —
-        /// the gameplay layer must decide whether a tap that becomes a long-press counts (see report: GDD conflict).
-        /// </summary>
-        public event Action<PointerSample> LongPressed;
+        /// <summary>The Slow-Mo button zone was pressed.</summary>
+        public event Action<PointerSample> SlowMoPressed;
         /// <summary>Fires once per app session: the trigger for deferred SDK/audio initialisation.</summary>
         public event Action FirstTap;
 
@@ -62,9 +61,7 @@ namespace OneMoreTap.Core
         private InputAction _press;
         private InputAction _position;
         private bool _pressed;
-        private bool _longPressFired;
         private bool _firstTapRaised;
-        private double _pressStartTime;
         private Rect _safeArea;
         private Vector2Int _screenSize;
 
@@ -109,12 +106,12 @@ namespace OneMoreTap.Core
         private void Update()
         {
             if (Screen.width != _screenSize.x || Screen.height != _screenSize.y) RefreshScreenMetrics();
+        }
 
-            if (_pressed && !_longPressFired && Time.realtimeSinceStartupAsDouble - _pressStartTime >= _longPressSeconds)
-            {
-                _longPressFired = true;
-                LongPressed?.Invoke(Sample(_position.ReadValue<Vector2>(), Time.realtimeSinceStartupAsDouble));
-            }
+        public Rect SlowMoZone
+        {
+            get => _slowMoZone;
+            set => _slowMoZone = value;
         }
 
         public void SetHapticsEnabled(bool enabled) => _hapticsEnabled = enabled;
@@ -128,10 +125,13 @@ namespace OneMoreTap.Core
         {
             if (!InputEnabled) return;
             _pressed = true;
-            _longPressFired = false;
-            _pressStartTime = ctx.time;
 
             PointerSample sample = Sample(_position.ReadValue<Vector2>(), ctx.time);
+            if (_slowMoZone.Contains(sample.Normalized))
+            {
+                SlowMoPressed?.Invoke(sample);
+                return;
+            }
             if (!_firstTapRaised)
             {
                 _firstTapRaised = true;

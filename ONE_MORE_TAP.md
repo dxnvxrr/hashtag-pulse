@@ -1,26 +1,52 @@
 # One More Tap — production baseline
 
-Unity 6 client (`Client/`) and Fastify + Prisma + Redis backend (`Backend/`) for the One More Tap GDD.
+Unity 6 client (`Client/`), Fastify + Prisma + Redis backend (`Backend/`), and a playable web client (`Web/`)
+that uses the same rules and the same server API.
 
-## Run the backend
+## Play it
+
+**Server-verified (full stack):**
 
 ```bash
 cd Backend
-cp .env.example .env          # fill in secrets
-docker compose up --build     # API on :8080, Postgres, Redis; migrations run on start
-# or locally:
-npm ci && npx prisma migrate deploy && npm run dev
-npm test                      # anti-cheat + ring-schedule golden vectors
+cp .env.example .env          # set JWT_ACCESS_SECRET and DEVICE_FINGERPRINT_PEPPER
+docker compose up --build     # API + Postgres + Redis; migrations run on start
+open http://localhost:8080/play/
 ```
 
-## Open the client
+Without Docker: run Postgres and Redis locally, then `npm ci && npx prisma migrate deploy && npm run dev`
+from `Backend/` and open `http://localhost:8080/play/`.
 
-1. Open `Client/` with Unity 6. Package Manager resolves `Packages/manifest.json` (UniTask and VContainer come from git).
-2. In the boot scene: add a `UIDocument` (with elements named `splash` and `hint`), a GameObject with
-   `InputController`, and a GameObject with `GameLifetimeScope`; assign both references and set the API base URL.
-3. Addressables: mark audio clips with the label `audio`.
+**Offline (no server):** `node Web/build-artifact.mjs` writes one self-contained HTML body to `Web/dist/`.
+Opened anywhere without the backend, the game scores runs on the device and says so.
 
-Optional platform SDKs, each compiled only when its scripting define is set (Player Settings → Scripting Define Symbols):
+Controls: tap or click anywhere (or press Space) when the moving ring meets the inner circle. The SLOW-MO button
+in the corner arms a ticket for the next ring. In Pulse, after your third miss you're offered one simulated
+rewarded ad for an extra life. In development mode the server verifies it through `/v1/ads/dev-complete`.
+
+## Tests
+
+```bash
+cd Backend && npm test
+```
+
+- Ring-schedule golden vectors (TypeScript ≡ C# ≡ web).
+- Verdict windows, bot and reaction-floor flags, slow-mo, rewarded-ad resumes.
+- Web client verdicts versus server re-simulation.
+- Unity `RunSession` versus server re-simulation. Needs `mcs` and `mono`; the test is skipped when they're absent.
+
+## Unity client
+
+1. Open `Client/` with Unity 6. UniTask and VContainer resolve from git.
+2. Set up the boot scene:
+   - a `UIDocument` with elements named `splash`, `hint`, `verdict-word`, `verdict-delta`, `hud-ring` and `hud-lives`;
+   - an `InputController`;
+   - a `GameplayController` with two LineRenderers (`ring` and `target`), plus an optional burst ParticleSystem;
+   - a `GameLifetimeScope` referencing all of them;
+   - an orthographic camera centred on the gameplay object.
+3. Addressables: label audio clips `audio`.
+
+Optional SDKs compile only when their scripting define is set:
 
 | Define | Requires | Enables |
 |---|---|---|
@@ -28,15 +54,22 @@ Optional platform SDKs, each compiled only when its scripting define is set (Pla
 | `ONEMORETAP_GPGS` | Google Play Games plugin v11+ | Play Games linking (Android) |
 | `ONEMORETAP_LEVELPLAY` | Unity LevelPlay | Real rewarded ads (otherwise a simulated provider + dev callback) |
 
-## Request signing contract
+## Protocol notes
 
-Every game endpoint requires `Authorization: Bearer`, `X-Device-Fingerprint`, `X-Timestamp` (server-time ms),
-`X-Nonce`, and `X-Signature = base64(HMAC-SHA256(sessionKey, METHOD\nPATH\nTIMESTAMP\nNONCE\nhex(SHA256(body))))`.
-The session key is issued at login/refresh and rotates with it.
+- **Signing:** every game endpoint needs `Authorization: Bearer`, `X-Device-Fingerprint`, `X-Timestamp`
+  (server-time ms), `X-Nonce` and
+  `X-Signature = base64(HMAC-SHA256(sessionKey, METHOD\nPATH\nTIMESTAMP\nNONCE\nhex(SHA256(body))))`.
+- **Runs are server-authoritative:** `/v1/runs/start` returns a seed. The client submits only tap times
+  (µs after ring 0), the Slow-Mo ring indices, and any ad `resumes`. The server re-simulates the timeline, scores
+  every ring, and quarantines runs that fail the bot, reaction-floor or clock-drift checks.
+- **Timeline rule:** ring *i+1* spawns `gap` ms after ring *i* resolves (on a tap, or when its window expires). After
+  a server-verified rewarded ad, it spawns at `max(normal spawn, resumeAt)`.
+- **Slow-Mo** is a dedicated button, not the GDD's long-press. Taps fire on press-down, so every long-press would
+  also have been a tap.
+- **Offline runs** are practice only. They're never rewarded, because the server must issue the run seed.
 
-## Server-authoritative runs
+## Background jobs (run inside the API, single-flight via a Redis lock)
 
-`POST /v1/runs/start` returns a seed; client and server generate identical ring schedules
-(`Client/Assets/Scripts/Core/RingSchedule.cs` ≡ `Backend/src/services/ringSchedule.ts`, pinned by golden vectors in
-`Backend/test/antiCheat.test.ts`). The client submits only tap times; the server re-simulates, computes verdicts,
-rewards, and rating, and quarantines runs that fail bot / reaction-floor / clock-drift checks.
+- Unsubmitted runs expire after 1 hour.
+- Accounts pending deletion are hard-deleted after 30 days. Audit rows are anonymised: user id and IP are cleared.
+- A consumer group drains the telemetry streams into `telemetry_events`.

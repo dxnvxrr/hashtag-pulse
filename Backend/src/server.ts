@@ -13,6 +13,8 @@ import { gameController } from './controllers/game.controller.js';
 import { iapController } from './controllers/iap.controller.js';
 import { adsController } from './controllers/ads.controller.js';
 import { telemetryController } from './controllers/telemetry.controller.js';
+import { webController } from './controllers/web.controller.js';
+import { startJobs } from './jobs/maintenance.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -128,16 +130,19 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(iapController);
   await app.register(adsController);
   await app.register(telemetryController);
+  await app.register(webController);
 
   return app;
 }
 
 async function main(): Promise<void> {
   const app = await buildServer();
+  const stopJobs = config.RUN_JOBS ? startJobs(app.log) : () => undefined;
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down');
     try {
+      stopJobs();
       await app.close();
       await prisma.$disconnect();
       redis.disconnect();

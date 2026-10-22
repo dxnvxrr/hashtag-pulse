@@ -18,6 +18,7 @@ namespace OneMoreTap.Core
         [SerializeField] private BootConfig _boot = new BootConfig();
         [SerializeField] private InputController _input;
         [SerializeField] private UIDocument _ui;
+        [SerializeField] private GameplayController _gameplay;
 
         [Header("LevelPlay (only used when ONEMORETAP_LEVELPLAY is defined)")]
         [SerializeField] private string _levelPlayAppKey = "";
@@ -29,6 +30,7 @@ namespace OneMoreTap.Core
             builder.RegisterInstance(_boot);
             builder.RegisterComponent(_input);
             builder.RegisterComponent(_ui);
+            builder.RegisterComponent(_gameplay);
 
             builder.Register<SecureStorage>(Lifetime.Singleton);
             builder.Register<NetworkManager>(Lifetime.Singleton);

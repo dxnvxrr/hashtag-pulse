@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<!--ARTIFACT-HEAD-START-->
+<title>One More Tap</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;500;800&family=Manrope:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="style.css">
+<!--ARTIFACT-HEAD-END-->
+</head>
+<body>
+<!--ARTIFACT-BODY-START-->
+<main id="app">
+  <canvas id="stage" aria-label="Game area. Tap anywhere when the moving ring meets the inner circle."></canvas>
+  <div id="vignette" class="vignette" aria-hidden="true"></div>
+
+  <header class="hud" id="hud" hidden>
+    <button id="end-run" class="hud-btn" type="button" aria-label="End run">END</button>
+    <div class="hud-cell"><span class="label">RING</span><span id="hud-ring" class="num">0</span></div>
+    <div class="hud-cell"><span class="label" id="hud-lives-label">LIVES</span><span id="hud-lives" class="lives" aria-live="polite"></span></div>
+    <div class="hud-cell"><span class="label">TICKS</span><span id="hud-ticks" class="num">0</span></div>
+  </header>
+
+  <div id="verdict" class="verdict" aria-live="polite">
+    <span id="verdict-word" class="verdict-word"></span>
+    <span id="verdict-delta" class="verdict-delta"></span>
+  </div>
+  <p id="hint" class="hint" hidden>TAP WHEN THE RING CLOSES</p>
+
+  <button id="slowmo" class="slowmo" type="button" hidden aria-label="Arm Slow-Mo for the next ring">
+    <span class="slowmo-label">SLOW-MO</span>
+    <span id="slowmo-count" class="slowmo-count">3</span>
+  </button>
+
+  <section id="title-screen" class="screen" aria-labelledby="wordmark">
+    <div class="screen-inner">
+      <h1 id="wordmark" class="wordmark">ONE<br>MORE<br>TAP</h1>
+      <p class="tagline">Perfection is <span class="mono">0.000s</span> away.</p>
+      <dl class="profile">
+        <div><dt>BEST TAP</dt><dd id="profile-best" class="mono">—</dd></div>
+        <div><dt>PRECISION</dt><dd id="profile-rating" class="mono">1000</dd></div>
+        <div><dt>TICKS</dt><dd id="profile-ticks" class="mono">0</dd></div>
+      </dl>
+      <div class="modes" role="radiogroup" aria-label="Game mode">
+        <button type="button" class="mode" role="radio" aria-checked="true" data-mode="PULSE">PULSE<small>3 lives, endless</small></button>
+        <button type="button" class="mode" role="radio" aria-checked="false" data-mode="GAUNTLET">GAUNTLET<small>today's 25 rings</small></button>
+        <button type="button" class="mode" role="radio" aria-checked="false" data-mode="ZEN">ZEN<small>no lives, no stakes</small></button>
+      </div>
+      <button id="start" class="primary" type="button">PLAY</button>
+      <div class="toggles">
+        <label><input id="opt-sound" type="checkbox" checked> Sound</label>
+        <label><input id="opt-haptics" type="checkbox" checked> Haptics</label>
+      </div>
+      <p id="connection" class="connection">Checking for game server…</p>
+    </div>
+  </section>
+
+  <section id="continue-screen" class="screen screen-dim" hidden aria-labelledby="continue-title">
+    <div class="screen-inner narrow">
+      <h2 id="continue-title" class="screen-title">So close.</h2>
+      <p>Watch a short ad to get one more life and keep this run going.</p>
+      <button id="continue-ad" class="primary" type="button">WATCH AD · +1 LIFE</button>
+      <button id="continue-end" class="secondary" type="button">END RUN</button>
+      <p id="ad-status" class="small" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <section id="results-screen" class="screen screen-dim" hidden aria-labelledby="results-title">
+    <div class="screen-inner">
+      <p class="eyebrow" id="results-mode">PULSE</p>
+      <h2 id="results-title" class="big-delta mono">0.000s</h2>
+      <p class="caption" id="results-caption">best tap this run</p>
+      <p id="results-pb" class="pb" hidden>NEW PERSONAL BEST</p>
+      <dl class="stats">
+        <div><dt>RINGS</dt><dd id="r-rings" class="mono">0</dd></div>
+        <div><dt>PERFECT</dt><dd id="r-perfect" class="mono">0</dd></div>
+        <div><dt>CLEAN</dt><dd id="r-clean" class="mono">0</dd></div>
+        <div><dt>CLOSE</dt><dd id="r-close" class="mono">0</dd></div>
+        <div><dt>AVG Δ</dt><dd id="r-avg" class="mono">—</dd></div>
+        <div><dt>TICKS</dt><dd id="r-ticks" class="mono">+0</dd></div>
+      </dl>
+      <p id="r-rating" class="rating mono"></p>
+      <p id="r-verify" class="verify"></p>
+      <ol id="leaderboard" class="leaderboard" hidden></ol>
+      <div class="actions">
+        <button id="again" class="primary" type="button">ONE MORE</button>
+        <button id="share" class="secondary" type="button">COPY SCORE</button>
+        <button id="menu" class="secondary" type="button">MENU</button>
+      </div>
+      <p id="share-text" class="small share-text" aria-live="polite"></p>
+    </div>
+  </section>
+</main>
+<!--ARTIFACT-BODY-END-->
+<script type="module" src="game.js"></script>
+</body>
+</html>

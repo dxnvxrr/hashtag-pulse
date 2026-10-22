@@ -13,6 +13,11 @@ const EnvSchema = z.object({
   /** Set to the number of trusted proxy hops (e.g. 1 behind a load balancer) so req.ip is the real client. */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 
+  /** Directory holding the web client (Web/). Served at /play. Empty disables it. */
+  WEB_ROOT: z.string().default('../Web'),
+  /** Run background jobs (run expiry, account purge, telemetry drain) in this process. */
+  RUN_JOBS: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
 

@@ -16,4 +16,6 @@ export const RedisKeys = {
   telemetryStream: (category: string) => `telemetry:${category}`,
   telemetryCounter: (day: string) => `telemetry:counters:${day}`,
   googleAccessToken: () => 'cache:google-play-access-token',
+  leaderboard: (board: string, day: string) => `lb:${board}:${day}`,
+  jobLock: (job: string) => `lock:job:${job}`,
 } as const;

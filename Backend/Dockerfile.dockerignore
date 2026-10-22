@@ -1,0 +1,9 @@
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+Backend/dist
+Backend/test
+Client
+.git
+*.log

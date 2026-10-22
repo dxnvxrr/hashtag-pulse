@@ -22,6 +22,7 @@ enum Platform {
   IOS
   ANDROID
   EDITOR
+  WEB
 }
 
 enum IdentityProvider {
@@ -274,4 +275,24 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([action, createdAt])
   @@map("audit_logs")
+}
+
+/// Analytics sink fed by the telemetry consumer worker (Redis Streams -> here). Swap for a warehouse at scale.
+model TelemetryEvent {
+  id         BigInt   @id @default(autoincrement())
+  /// Redis stream entry id — unique so redelivered entries are ignored.
+  streamId   String   @db.VarChar(64)
+  category   String   @db.VarChar(32)
+  name       String   @db.VarChar(64)
+  userId     String   @db.Uuid
+  clientTs   DateTime
+  receivedAt DateTime
+  appVersion String   @db.VarChar(32)
+  platform   String   @db.VarChar(16)
+  sessionId  String   @db.VarChar(64)
+  props      Json
+
+  @@unique([category, streamId])
+  @@index([category, name, receivedAt])
+  @@map("telemetry_events")
 }

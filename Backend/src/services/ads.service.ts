@@ -6,7 +6,7 @@ import { redis, RedisKeys } from '../lib/redis.js';
 import { safeEqual } from '../lib/crypto.js';
 import { Errors } from '../lib/errors.js';
 import { audit } from '../lib/audit.js';
-import { applyLedgerEntries } from './wallet.service.js';
+import { applyLedger } from './wallet.service.js';
 import { grantExtraLife, todayKey } from './antiCheat.service.js';
 
 /** The two GDD placements. Rewards are defined here, never by the client or the ad network. */
@@ -50,34 +50,36 @@ export async function createAdIntent(userId: string, placement: AdPlacement, run
 }
 
 async function fulfil(grantId: string, networkEventId: string, ip: string): Promise<'granted' | 'duplicate' | 'expired' | 'unknown'> {
-  return prisma.$transaction(async (tx) => {
+  // 1) Durable state change in Postgres: PENDING -> GRANTED exactly once.
+  const decided = await prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "ad_rewards" WHERE "id" = ${grantId}::uuid FOR UPDATE`);
-    if (rows.length === 0) return 'unknown';
+    if (rows.length === 0) return { outcome: 'unknown' as const };
     const reward = await tx.adReward.findUniqueOrThrow({ where: { id: grantId } });
-    if (reward.status === 'GRANTED') return 'duplicate';
+    if (reward.status === 'GRANTED') return { outcome: 'duplicate' as const };
     if (reward.expiresAt.getTime() < Date.now()) {
       await tx.adReward.update({ where: { id: grantId }, data: { status: 'EXPIRED' } });
-      return 'expired';
+      return { outcome: 'expired' as const };
     }
-
     await tx.adReward.update({ where: { id: grantId }, data: { status: 'GRANTED', grantedAt: new Date(), networkEventId } });
-
-    if (reward.placement === 'double_ticks') {
-      await redis.incrby(`boost:${reward.userId}`, DOUBLE_TICKS_RINGS);
-      await redis.expire(`boost:${reward.userId}`, 24 * 60 * 60);
-    } else if (reward.placement === 'replay_ring') {
-      const runId = await redis.get(`adrun:${grantId}`);
-      const extended = runId ? await grantExtraLife(reward.userId, runId) : false;
-      if (!extended) {
-        // Run already over: compensate with a Slow-Mo Ticket so the viewer is never left with nothing.
-        await applyLedgerEntries(tx, reward.userId, [
-          { currency: 'SLOWMO_TICKETS', amount: 1n, reason: 'AD_REWARD', idempotencyKey: `ad:${grantId}:SLOWMO`, metadata: { placement: reward.placement } },
-        ]);
-      }
-    }
     await audit('ads.reward_granted', { userId: reward.userId, ip, metadata: { grantId, placement: reward.placement, networkEventId } }, tx);
-    return 'granted';
+    return { outcome: 'granted' as const, userId: reward.userId, placement: reward.placement };
   });
+  if (decided.outcome !== 'granted') return decided.outcome;
+
+  // 2) Side effects only after the commit, so a rolled-back transaction can never leave a Redis reward behind.
+  if (decided.placement === 'double_ticks') {
+    await redis.multi().incrby(`boost:${decided.userId}`, DOUBLE_TICKS_RINGS).expire(`boost:${decided.userId}`, 24 * 60 * 60).exec();
+  } else if (decided.placement === 'replay_ring') {
+    const runId = await redis.get(`adrun:${grantId}`);
+    const extended = runId ? await grantExtraLife(decided.userId, runId) : false;
+    if (!extended) {
+      // Run already over: compensate with a Slow-Mo Ticket so the viewer is never left with nothing. Idempotent by key.
+      await applyLedger(decided.userId, [
+        { currency: 'SLOWMO_TICKETS', amount: 1n, reason: 'AD_REWARD', idempotencyKey: `ad:${grantId}:SLOWMO`, metadata: { placement: decided.placement } },
+      ]);
+    }
+  }
+  return 'granted';
 }
 
 /**

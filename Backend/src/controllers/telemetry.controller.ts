@@ -34,7 +34,7 @@ const Event = z.object({
 
 const Batch = z.object({
   appVersion: z.string().max(32),
-  platform: z.enum(['IOS', 'ANDROID', 'EDITOR']),
+  platform: z.enum(['IOS', 'ANDROID', 'EDITOR', 'WEB']),
   events: z.array(Event).min(1).max(200),
 });
 

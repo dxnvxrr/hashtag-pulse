@@ -138,7 +138,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
     baseDurationMs,
     ftue,
     maxRings,
-    maxMisses: GameRules.maxMisses,
+    maxMisses: mode === 'ZEN' ? GameRules.runMaxRings : GameRules.maxMisses,
     ring0ServerTimeMs: ring0,
     serverTimeMs: now,
     verdictWindowsMs: {
@@ -171,6 +171,12 @@ export interface EvaluationInput {
   tapsUs: number[];
   /** Ring indices on which a Slow-Mo Ticket was consumed. */
   slowMoRings: number[];
+  /**
+   * Rewarded-ad continues: play paused after ring `afterRing` and resumed at `atUs`. The next ring spawns at
+   * max(normal spawn, atUs). At most one per extra life granted by a server-verified ad.
+   */
+  resumes?: Array<{ afterRing: number; atUs: number }>;
+  maxResumes?: number;
 }
 
 export interface EvaluationResult {
@@ -232,6 +238,14 @@ export function evaluateRun(input: EvaluationInput): EvaluationResult {
   if (slowMo.size !== input.slowMoRings.length) return reject('duplicate_slowmo');
   for (const idx of slowMo) if (!Number.isInteger(idx) || idx < 0 || idx >= n) return reject('bad_slowmo_index');
 
+  const resumes = new Map<number, number>();
+  for (const r of input.resumes ?? []) {
+    if (!Number.isInteger(r.afterRing) || !Number.isInteger(r.atUs) || r.afterRing < 0 || r.afterRing >= n - 1) return reject('bad_resume');
+    if (resumes.has(r.afterRing)) return reject('duplicate_resume');
+    resumes.set(r.afterRing, r.atUs);
+  }
+  if (resumes.size > (input.maxResumes ?? 0)) return reject('resume_without_extra_life');
+
   const rings = generateSchedule(input.seed, input.baseDurationMs, n);
   const signedDeltasMs: number[] = [];
   let spawnUs = 0;
@@ -239,7 +253,14 @@ export function evaluateRun(input: EvaluationInput): EvaluationResult {
 
   for (let i = 0; i < n; i++) {
     const ring = rings[i]!;
-    if (i > 0) spawnUs = resolveUs + ring.gapMs * 1000;
+    if (i > 0) {
+      spawnUs = resolveUs + ring.gapMs * 1000;
+      const resumeAt = resumes.get(i - 1);
+      if (resumeAt !== undefined) {
+        if (resumeAt < resolveUs) return reject('resume_before_resolve');
+        spawnUs = Math.max(spawnUs, resumeAt);
+      }
+    }
     // Slow-Mo = 0.4x time → the ring takes 2.5x as long on the wall clock.
     const durationUs = slowMo.has(i) ? ring.durationMs * 2_500 : ring.durationMs * 1_000;
     const closeUs = spawnUs + durationUs;
@@ -286,10 +307,27 @@ export function evaluateRun(input: EvaluationInput): EvaluationResult {
 
 // ------------------------------------------------------------ Submission
 
+/** Atomically takes up to `rings` boosted rings from the double-ticks balance (two concurrent submits can't both spend it). */
+const CONSUME_BOOST_LUA = `
+local v = tonumber(redis.call('GET', KEYS[1]) or '0')
+local take = math.min(v, tonumber(ARGV[1]))
+if take > 0 then redis.call('DECRBY', KEYS[1], take) end
+return take`;
+
+async function consumeBoost(userId: string, rings: number): Promise<number> {
+  return Number(await redis.eval(CONSUME_BOOST_LUA, 1, `boost:${userId}`, String(rings)));
+}
+
+/** Gauntlet ranking: fewer misses first, then lowest total delta. Lower score is better. */
+export function gauntletScore(misses: number, totalDeltaUs: number): number {
+  return misses * 1e10 + totalDeltaUs;
+}
+
 export interface RunSubmitInput {
   runId: string;
   tapsUs: number[];
   slowMoRings: number[];
+  resumes?: Array<{ afterRing: number; atUs: number }>;
 }
 
 export interface RunSubmitResult {
@@ -319,10 +357,12 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
     seed: Number(state.seed),
     baseDurationMs: Number(state.baseDurationMs),
     ftue: state.ftue === '1',
-    maxMisses: GameRules.maxMisses + Number(state.extraLives ?? 0),
+    maxMisses: (mode === 'ZEN' ? GameRules.runMaxRings : GameRules.maxMisses) + Number(state.extraLives ?? 0),
     maxRings: Number(state.maxRings),
     tapsUs: input.tapsUs,
     slowMoRings: input.slowMoRings,
+    resumes: input.resumes ?? [],
+    maxResumes: Number(state.extraLives ?? 0),
   };
   const ev = evaluateRun(evalInput);
 
@@ -373,10 +413,7 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
   // ---- Rewards
   let ticks = 0;
   if (mode !== 'ZEN') {
-    const boostKey = `boost:${userId}`;
-    const boostRemaining = Number((await redis.get(boostKey)) ?? 0);
-    const boosted = Math.min(boostRemaining, ev.verdicts.length);
-    if (boosted > 0) await redis.decrby(boostKey, boosted);
+    const boosted = await consumeBoost(userId, ev.verdicts.length);
     ev.verdicts.forEach((v, i) => {
       const base = v === 'PERFECT' ? GameRules.ticksPerPerfect : v === 'CLEAN' ? GameRules.ticksPerClean : v === 'CLOSE' ? GameRules.ticksPerClose : 0;
       ticks += i < boosted ? base * 2 : base;
@@ -434,6 +471,13 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       return w;
     });
 
+    if (mode === 'GAUNTLET') {
+      // ZADD LT keeps each player's best attempt of the day.
+      const key = RedisKeys.leaderboard('gauntlet', todayKey());
+      await redis.zadd(key, 'LT', gauntletScore(ev.misses, ev.totalDeltaUs), userId);
+      await redis.expire(key, 8 * 24 * 60 * 60);
+    }
+
     return {
       runId: input.runId,
       status: 'VALIDATED',
@@ -458,6 +502,34 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
 /** Server time for client clock-offset estimation (NTP-style, see NetworkManager.SyncClockAsync). */
 export function serverTime(): { serverTimeMs: number } {
   return { serverTimeMs: Date.now() };
+}
+
+export interface LeaderboardRow {
+  rank: number;
+  player: string;
+  isYou: boolean;
+  misses: number;
+  totalDeltaUs: number;
+}
+
+function decodeGauntletScore(score: number): { misses: number; totalDeltaUs: number } {
+  const misses = Math.floor(score / 1e10);
+  return { misses, totalDeltaUs: score - misses * 1e10 };
+}
+
+/** Today's Gauntlet: top 10 plus the caller's own rank. Players are shown by a short anonymous tag. */
+export async function gauntletLeaderboard(userId: string): Promise<{ day: string; top: LeaderboardRow[]; you: LeaderboardRow | null }> {
+  const day = todayKey();
+  const key = RedisKeys.leaderboard('gauntlet', day);
+  const raw = await redis.zrange(key, 0, 9, 'WITHSCORES');
+  const top: LeaderboardRow[] = [];
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    const member = raw[i]!;
+    top.push({ rank: i / 2 + 1, player: `Player ${member.slice(0, 4).toUpperCase()}`, isYou: member === userId, ...decodeGauntletScore(Number(raw[i + 1])) });
+  }
+  const [rank, score] = await Promise.all([redis.zrank(key, userId), redis.zscore(key, userId)]);
+  const you = rank === null || score === null ? null : { rank: rank + 1, player: 'You', isYou: true, ...decodeGauntletScore(Number(score)) };
+  return { day, top, you };
 }
 
 export function todayKey(): string {

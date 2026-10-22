@@ -1,4 +1,5 @@
 using System;
+using OneMoreTap.Core;
 
 // DTOs for JsonUtility: public fields, [Serializable], no properties/dictionaries.
 // Field names mirror the backend's JSON exactly.
@@ -162,6 +163,17 @@ namespace OneMoreTap.Security
         public string runId;
         public long[] tapsUs;
         public int[] slowMoRings;
+        public ResumePoint[] resumes;
+    }
+
+    [Serializable]
+    public sealed class ProfileResponse
+    {
+        public string userId;
+        public int precisionRating;
+        /// <summary>-1 when no best yet.</summary>
+        public long bestDeltaUs;
+        public WalletView wallet;
     }
 
     [Serializable]

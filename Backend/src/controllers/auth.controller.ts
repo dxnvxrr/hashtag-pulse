@@ -15,7 +15,7 @@ const Fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
 
 const GuestBody = z.object({
   deviceFingerprint: Fingerprint,
-  platform: z.enum(['IOS', 'ANDROID', 'EDITOR']),
+  platform: z.enum(['IOS', 'ANDROID', 'EDITOR', 'WEB']),
   model: z.string().min(1).max(128),
   isMinor: z.boolean().default(false),
 });
