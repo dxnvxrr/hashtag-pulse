@@ -24,15 +24,20 @@ Controls: tap or click anywhere (or press Space) when the moving ring meets the 
 in the corner arms a ticket for the next ring.
 
 **Modes (web):**
-- **Ranked:** 5 lives. Hits fill the golden circle around the target: a PERFECT fills 2 points, a CLEAN or SO
-  CLOSE fills 1, and a miss empties it. A full circle permanently raises your Prestige by one level (1–100) and
-  unlocks and equips that level's animated background; overflow carries into the next circle. Circles hold 10 points
-  up to level 25 (5 PERFECT or 10 other hits), then 15, 20, and 25 points for levels 76–100. Losing the 5th life opens
-  one short ad popup per run; after it closes the player can refill all 5 lives or end the run.
+- **Ranked:** 5 lives. Hits fill the golden circle around the target: PERFECT +2, CLEAN +1.5, SO CLOSE +1. A full
+  circle permanently raises your Prestige by one level (1–100) and unlocks and equips that level's animated
+  background; overflow carries into the next circle. Circles hold 10 points up to level 25, then 15, 20, and 25.
+  On levels X1–X7 of every block of ten, a miss halves the circle (rounded up to the next half point; under 1 point
+  drops to 0). On levels X8–X10 a miss empties it. Losing the 5th life opens one short ad popup per run; after it
+  closes the player can refill all 5 lives or end the run.
 - **Zen:** no lives, no stakes, no Prestige.
 
 **Unlocks & Sound** (title screen): a scrollable menu of all 100 backgrounds plus the default. Tap an unlocked one to
-equip it. The menu also holds the volume slider and the haptics toggle. Level 100, ZERO, stays hidden until earned.
+equip it. The menu also holds separate Music and Sound FX sliders and the haptics toggle. Level 100, ZERO, stays
+hidden until earned.
+
+**Music:** procedural chiptune, one theme per block of ten backgrounds (Drift, Prism, … Nova) plus ZERO at 100. It
+follows the equipped background, and higher blocks add more layers (hats, arpeggios, kick). See `Web/music.js`.
 
 **Slow-Mo** rings run at 0.4x and are scored in game time, so every verdict window is 2.5x wider in real time.
 Slow-Mo rings never count toward your best tap or Precision rating, because tickets can be bought.

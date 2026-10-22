@@ -122,33 +122,46 @@ export function prestigeCircleSize(level) {
   return level <= 25 ? 10 : level <= 50 ? 15 : level <= 75 ? 20 : 25;
 }
 
-/** Points a verdict adds to the golden circle: a PERFECT fills twice as much as any other hit. */
-export function prestigePoints(verdict) {
-  return verdict === 'PERFECT' ? 2 : verdict === 'MISS' ? 0 : 1;
+/** Circle fill per verdict in half-points (integers, so client and server can't drift): PERFECT 2, CLEAN 1.5, CLOSE 1. */
+export function prestigeHalfPoints(verdict) {
+  return verdict === 'PERFECT' ? 4 : verdict === 'CLEAN' ? 3 : verdict === 'CLOSE' ? 2 : 0;
+}
+
+/** Levels X1–X7 of every ten are forgiving: a miss halves the circle. On X8–X10 a miss empties it. */
+export function missHalvesCircle(nextLevel) {
+  return ((nextLevel - 1) % 10) + 1 <= 7;
 }
 
 /**
- * Applies a run's verdicts to the player's Prestige. Hits fill the circle (PERFECT 2 points, CLEAN/CLOSE 1); a MISS
- * empties it. A full circle unlocks the next level permanently; overflow carries into the next circle.
- * Mirrors applyPrestige on the server.
+ * Circle fill (half-points) after a miss while working toward `nextLevel`. Forgiving levels keep half, rounded up to
+ * the next half point (8 -> 4, 8.5 -> 4.5, 2 -> 1); anything under 1 point drops to 0.
+ */
+export function circleAfterMiss(halfPoints, nextLevel) {
+  if (!missHalvesCircle(nextLevel)) return 0;
+  const kept = Math.ceil(halfPoints / 2);
+  return kept < 2 ? 0 : kept;
+}
+
+/**
+ * Applies a run's verdicts to the player's Prestige. A full circle unlocks the next level permanently; overflow carries
+ * into the next circle. Returns the circle fill in points. Mirrors applyPrestige on the server.
  */
 export function applyPrestige(startLevel, verdicts) {
   let level = startLevel;
-  let inCircle = 0;
+  let half = 0;
   const unlocked = [];
   for (const v of verdicts) {
+    if (level >= PRESTIGE_MAX) break;
     if (v === 'MISS') {
-      inCircle = 0;
+      half = circleAfterMiss(half, level + 1);
       continue;
     }
-    if (level >= PRESTIGE_MAX) continue;
-    inCircle += prestigePoints(v);
-    while (level < PRESTIGE_MAX && inCircle >= prestigeCircleSize(level + 1)) {
-      inCircle -= prestigeCircleSize(level + 1);
+    half += prestigeHalfPoints(v);
+    while (level < PRESTIGE_MAX && half >= prestigeCircleSize(level + 1) * 2) {
+      half -= prestigeCircleSize(level + 1) * 2;
       level++;
       unlocked.push(level);
     }
-    if (level >= PRESTIGE_MAX) inCircle = 0;
   }
-  return { level, unlocked, inCircle };
+  return { level, unlocked, inCircle: level >= PRESTIGE_MAX ? 0 : half / 2 };
 }

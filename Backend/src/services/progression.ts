@@ -41,29 +41,40 @@ export function prestigeCircleSize(level: number): number {
   return level <= 25 ? 10 : level <= 50 ? 15 : level <= 75 ? 20 : 25;
 }
 
-/** PERFECT fills the circle twice as much as any other hit. */
-export function prestigePoints(verdict: Verdict): number {
-  return verdict === 'PERFECT' ? 2 : verdict === 'MISS' ? 0 : 1;
+/** Circle fill per verdict in half-points: PERFECT 2, CLEAN 1.5, CLOSE 1. */
+export function prestigeHalfPoints(verdict: Verdict): number {
+  return verdict === 'PERFECT' ? 4 : verdict === 'CLEAN' ? 3 : verdict === 'CLOSE' ? 2 : 0;
 }
 
-/** Hits fill the circle (PERFECT 2, others 1); a MISS empties it; overflow carries into the next circle. */
+/** Levels X1–X7 of every ten: a miss halves the circle. X8–X10: a miss empties it. */
+export function missHalvesCircle(nextLevel: number): boolean {
+  return ((nextLevel - 1) % 10) + 1 <= 7;
+}
+
+/** Fill (half-points) after a miss: half, rounded up to the next half point; under 1 point drops to 0. */
+export function circleAfterMiss(halfPoints: number, nextLevel: number): number {
+  if (!missHalvesCircle(nextLevel)) return 0;
+  const kept = Math.ceil(halfPoints / 2);
+  return kept < 2 ? 0 : kept;
+}
+
+/** Full circle = next level (permanent); overflow carries into the next circle. */
 export function applyPrestige(startLevel: number, verdicts: Verdict[]): { level: number; unlocked: number[] } {
   let level = startLevel;
-  let inCircle = 0;
+  let half = 0;
   const unlocked: number[] = [];
   for (const v of verdicts) {
+    if (level >= PRESTIGE_MAX) break;
     if (v === 'MISS') {
-      inCircle = 0;
+      half = circleAfterMiss(half, level + 1);
       continue;
     }
-    if (level >= PRESTIGE_MAX) continue;
-    inCircle += prestigePoints(v);
-    while (level < PRESTIGE_MAX && inCircle >= prestigeCircleSize(level + 1)) {
-      inCircle -= prestigeCircleSize(level + 1);
+    half += prestigeHalfPoints(v);
+    while (level < PRESTIGE_MAX && half >= prestigeCircleSize(level + 1) * 2) {
+      half -= prestigeCircleSize(level + 1) * 2;
       level++;
       unlocked.push(level);
     }
-    if (level >= PRESTIGE_MAX) inCircle = 0;
   }
   return { level, unlocked };
 }

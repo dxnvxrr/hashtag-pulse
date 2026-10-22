@@ -96,33 +96,64 @@ test('rating ignores slow-mo rings, identically on client and server', () => {
   assert.equal(progression.nextRating(1000, rings.slice(0, 4) as never), 1000, 'fewer than 5 non-slow rings: unchanged');
 });
 
-test('prestige: circle sizes, unlocks and resets match on client and server', () => {
-  assert.deepEqual([1, 25, 26, 50, 51, 75, 76, 100].map(progression.prestigeCircleSize), [10, 10, 15, 15, 20, 20, 25, 25]);
-  const hits = (n: number) => Array(n).fill('CLEAN');
-  const seq = [...hits(9), 'MISS', ...hits(10), ...hits(10), 'CLOSE', 'MISS', ...hits(25)];
-  const server = progression.applyPrestige(0, seq as never);
-  const client = web.applyPrestige(0, seq);
-  // 9 hits then a miss: nothing. 10 + 10: levels 1, 2. A miss empties the circle. 25 hits: levels 3, 4 (+5 left over).
-  assert.deepEqual(server.unlocked, [1, 2, 3, 4]);
-  assert.deepEqual(client.unlocked, server.unlocked);
-  assert.equal(client.level, 4);
-  assert.equal(client.inCircle, 5);
-  // Level 25 -> 26 needs 15 in a row; capped at 100.
-  assert.deepEqual(progression.applyPrestige(25, hits(15) as never).unlocked, [26]);
-  assert.equal(progression.applyPrestige(100, hits(50) as never).level, 100);
-  assert.deepEqual(web.applyPrestige(99, hits(30)).unlocked, progression.applyPrestige(99, hits(30) as never).unlocked);
-});
-
-test('prestige: a PERFECT fills twice as much as a CLEAN or CLOSE; overflow carries over', () => {
+test('prestige: points per verdict are PERFECT 2, CLEAN 1.5, SO CLOSE 1 (in half-points 4/3/2)', () => {
+  for (const impl of [web, progression]) {
+    assert.deepEqual(['PERFECT', 'CLEAN', 'CLOSE', 'MISS'].map((v) => impl.prestigeHalfPoints(v as never)), [4, 3, 2, 0]);
+  }
   const P = (n: number) => Array(n).fill('PERFECT');
   const C = (n: number) => Array(n).fill('CLOSE');
+  const L = (n: number) => Array(n).fill('CLEAN');
   for (const impl of [web.applyPrestige, progression.applyPrestige]) {
-    assert.deepEqual(impl(0, P(5) as never).unlocked, [1], '5 PERFECT = level 1');
-    assert.deepEqual(impl(0, P(4) as never).unlocked, [], '4 PERFECT is not enough');
-    assert.deepEqual(impl(0, C(10) as never).unlocked, [1], '10 CLOSE = level 1');
-    assert.deepEqual(impl(0, [...P(3), ...C(4)] as never).unlocked, [1], 'a mix: 3x2 + 4x1 = 10');
-    // 9 points then a PERFECT = 11: level 1 plus 1 point carried, so 9 more points reach level 2.
-    assert.deepEqual(impl(0, [...C(9), 'PERFECT', ...C(9)] as never).unlocked, [1, 2]);
-    assert.deepEqual(impl(0, [...P(4), 'MISS', ...P(4)] as never).unlocked, [], 'a miss empties the circle');
+    assert.deepEqual(impl(0, P(5) as never).unlocked, [1], '5 PERFECT = 10 points');
+    assert.deepEqual(impl(0, C(10) as never).unlocked, [1], '10 SO CLOSE = 10 points');
+    assert.deepEqual(impl(0, L(6) as never).unlocked, [], '6 CLEAN = 9 points');
+    assert.deepEqual(impl(0, L(7) as never).unlocked, [1], '7 CLEAN = 10.5 points, 0.5 carried');
+    assert.deepEqual(impl(0, [...P(2), ...L(2), ...C(3)] as never).unlocked, [1], 'mix: 4 + 3 + 3 = 10');
   }
+  assert.equal(web.applyPrestige(0, L(7)).inCircle, 0.5);
+});
+
+test('prestige: on levels X1–X7 a miss halves the circle, rounding up to the next half point', () => {
+  for (const impl of [web, progression]) {
+    // Working toward level 1 (a forgiving level). Values in half-points: 8 -> 4 -> 2 -> 1 -> 0 points.
+    assert.equal(impl.circleAfterMiss(16, 1), 8);
+    assert.equal(impl.circleAfterMiss(8, 1), 4);
+    assert.equal(impl.circleAfterMiss(4, 1), 2);
+    assert.equal(impl.circleAfterMiss(2, 1), 0, '1 point -> 0');
+    assert.equal(impl.circleAfterMiss(17, 1), 9, '8.5 -> 4.5 (4.25 rounded up)');
+    assert.equal(impl.circleAfterMiss(3, 1), 2, '1.5 -> 1 (0.75 rounded up)');
+    // Forgiving levels: 1–7, 11–17, ... 91–97. Strict: 8–10, 18–20, ... 98–100.
+    assert.deepEqual([1, 7, 8, 10, 11, 17, 18, 20, 97, 98, 100].map(impl.missHalvesCircle), [true, true, false, false, true, true, false, false, true, false, false]);
+    assert.equal(impl.circleAfterMiss(16, 8), 0, 'level 8: a miss empties the circle');
+  }
+  // Full sequence from the spec: 8/10, miss -> 4, miss -> 2, miss -> 1, miss -> 0.
+  const seq = [...Array(4).fill('PERFECT'), 'MISS', 'MISS', 'MISS', 'MISS'];
+  assert.equal(web.applyPrestige(0, seq).inCircle, 0);
+  assert.equal(web.applyPrestige(0, seq.slice(0, 5)).inCircle, 4);
+  assert.equal(web.applyPrestige(0, seq.slice(0, 7)).inCircle, 1);
+  // 8 points, miss -> 4, then 3 PERFECT = 10 -> level 1 (would have needed 5 PERFECT after a full reset).
+  const back = [...Array(4).fill('PERFECT'), 'MISS', ...Array(3).fill('PERFECT')];
+  assert.deepEqual(progression.applyPrestige(0, back as never).unlocked, [1]);
+  assert.deepEqual(web.applyPrestige(0, back).unlocked, [1]);
+  // Level 8 is strict: 9 points then a miss empties it.
+  assert.equal(web.applyPrestige(7, [...Array(9).fill('CLOSE'), 'MISS']).inCircle, 0);
+  // Client and server agree on a long mixed sequence across a block boundary.
+  const mixed = ['PERFECT', 'CLEAN', 'MISS', 'CLOSE', 'PERFECT', 'PERFECT', 'MISS', 'CLEAN', 'CLEAN', 'PERFECT', 'CLOSE', 'MISS', 'PERFECT', 'PERFECT', 'PERFECT'];
+  for (const start of [0, 6, 7, 9, 16, 97]) {
+    assert.deepEqual(web.applyPrestige(start, mixed).unlocked, progression.applyPrestige(start, mixed as never).unlocked, `start ${start}`);
+  }
+});
+
+test('music: every theme composes a full 4-bar loop that resolves', async () => {
+  // @ts-expect-error — plain JS module shared with the browser client
+  const music = await import('../../Web/music.js');
+  const names = new Set();
+  for (let i = 0; i <= 10; i++) {
+    const t = music.composeTheme(i);
+    assert.equal(t.steps.length, 32);
+    assert.ok(t.steps.filter((s: { lead: number | null }) => s.lead !== null).length >= 12, `theme ${i} has a melody`);
+    names.add(t.name);
+  }
+  assert.equal(names.size, 11);
+  assert.deepEqual([0, 1, 10, 11, 20, 99, 100].map(music.themeIndexFor), [0, 0, 0, 1, 1, 9, 10]);
 });

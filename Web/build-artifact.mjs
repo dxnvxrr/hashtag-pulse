@@ -11,11 +11,12 @@ const css = readFileSync(join(dir, 'style.css'), 'utf8');
 const core = readFileSync(join(dir, 'core.js'), 'utf8').replace(/^export /gm, '');
 const stripImports = (src) => src.replace(/^import \{[\s\S]*?\} from '\.\/[a-z]+\.js';\n/gm, '');
 const backgrounds = stripImports(readFileSync(join(dir, 'backgrounds.js'), 'utf8')).replace(/^export /gm, '');
+const music = stripImports(readFileSync(join(dir, 'music.js'), 'utf8')).replace(/^export /gm, '');
 const game = stripImports(readFileSync(join(dir, 'game.js'), 'utf8'));
 
 const between = (start, end) => html.slice(html.indexOf(start) + start.length, html.indexOf(end));
 const head = between('<!--ARTIFACT-HEAD-START-->', '<!--ARTIFACT-HEAD-END-->').replace('<link rel="stylesheet" href="style.css">', `<style>\n${css}</style>`);
 const body = between('<!--ARTIFACT-BODY-START-->', '<!--ARTIFACT-BODY-END-->');
 
-writeFileSync(out, `${head.trim()}\n${body.trim()}\n<script type="module">\n${core}\n${backgrounds}\n${game}</script>\n`);
+writeFileSync(out, `${head.trim()}\n${body.trim()}\n<script type="module">\n${core}\n${backgrounds}\n${music}\n${game}</script>\n`);
 console.log(`wrote ${out}`);

@@ -8,13 +8,16 @@ import {
   toGameTimeUs,
   windowRealUs,
   prestigeCircleSize,
-  prestigePoints,
+  prestigeHalfPoints,
+  circleAfterMiss,
+  missHalvesCircle,
   LIVES,
   PRESTIGE_MAX,
   SLOWMO_FACTOR,
   HUMAN_REACTION_FLOOR_MS,
 } from './core.js';
 import { drawBackground, drawThumbnail, themeInfo } from './backgrounds.js';
+import { Music, themeIndexFor, themeName } from './music.js';
 
 // ============================================================ Storage (per-browser conveniences only)
 
@@ -176,31 +179,71 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ============================================================ Audio + haptics (procedural, nothing to load)
 
+const clamp01 = (v, d) => Math.min(1, Math.max(0, Number.isFinite(Number(v)) ? Number(v) : d));
+
 const fx = {
   ctx: null,
   master: null,
-  volume: Math.min(1, Math.max(0, Number(store.get('volume', 0.8)) || 0)),
+  sfx: null,
+  musicBus: null,
+  music: null,
+  // Older builds stored one 'volume'; it becomes the Sound FX level.
+  sfxVolume: clamp01(store.get('sfxVolume', store.get('volume', 0.8)), 0.8),
+  musicVolume: clamp01(store.get('musicVolume', 0.5), 0.5),
   haptics: store.get('haptics', true),
   reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
 
+  /**
+   * Creates/resumes audio from inside a user gesture. Browsers start audio suspended until the player interacts; iOS
+   * additionally mutes Web Audio when the ringer switch is on silent unless the page asks for 'playback' audio.
+   */
   unlock() {
-    if (this.ctx) return;
-    try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!this.ctx) {
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'playback';
+      } catch {
+        /* older Safari: no audioSession */
+      }
+      try {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch {
+        this.ctx = null;
+        return;
+      }
       this.master = this.ctx.createGain();
-      this.master.gain.value = this.volume;
       this.master.connect(this.ctx.destination);
-    } catch {
-      this.ctx = null;
+      this.sfx = this.ctx.createGain();
+      this.sfx.gain.value = this.sfxVolume;
+      this.sfx.connect(this.master);
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = this.musicVolume;
+      this.musicBus.connect(this.master);
+      // A one-sample silent buffer started inside the gesture unlocks audio on older iOS.
+      const silent = this.ctx.createBufferSource();
+      silent.buffer = this.ctx.createBuffer(1, 1, 22050);
+      silent.connect(this.ctx.destination);
+      silent.start(0);
+      this.music = new Music(this.ctx, this.musicBus);
+      this.music.setTheme(themeIndexFor(game.equipped));
+      this.music.start();
     }
+    if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
   },
-  setVolume(v) {
-    this.volume = v;
-    store.set('volume', v);
-    if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  setSfxVolume(v) {
+    this.sfxVolume = v;
+    store.set('sfxVolume', v);
+    if (this.sfx) this.sfx.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  },
+  setMusicVolume(v) {
+    this.musicVolume = v;
+    store.set('musicVolume', v);
+    if (this.musicBus) this.musicBus.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  },
+  setMusicTheme(level) {
+    this.music?.setTheme(themeIndexFor(level));
   },
   tone(freq, dur, { type = 'sine', gain = 0.18, endFreq = null, delay = 0 } = {}) {
-    if (!this.ctx || this.volume <= 0) return;
+    if (!this.ctx || this.sfxVolume <= 0) return;
     const t = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
@@ -210,7 +253,7 @@ const fx = {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(this.master);
+    osc.connect(g).connect(this.sfx);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   },
@@ -399,14 +442,15 @@ function render(now) {
     // Zen: shows progress to the next streak milestone.
     let frac;
     if (run.mode === 'RANKED') {
-      frac = run.prestige >= PRESTIGE_MAX ? 1 : run.circle / prestigeCircleSize(run.prestige + 1);
+      frac = run.prestige >= PRESTIGE_MAX ? 1 : run.circleHalf / (prestigeCircleSize(run.prestige + 1) * 2);
     } else {
       const nextMilestone = [10, 25, 50, 100].find((m) => m > run.streak) ?? run.streak + 50;
       const prevMilestone = [0, 10, 25, 50, 100].filter((m) => m <= run.streak).pop() ?? 0;
       frac = (run.streak - prevMilestone) / (nextMilestone - prevMilestone);
     }
+    // The unfilled part is only a whisper, so it doesn't read as a second ring.
     ctx.strokeStyle = COLORS.gold;
-    ctx.globalAlpha = 0.14;
+    ctx.globalAlpha = 0.045;
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(x, g.cy, g.target + 11, 0, Math.PI * 2);
@@ -419,6 +463,15 @@ function render(now) {
       ctx.arc(x, g.cy, g.target + 11, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
       ctx.stroke();
       ctx.shadowBlur = 0;
+    }
+    if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) {
+      // Exact fill, e.g. "6.5 / 10", so halving after a miss is legible.
+      ctx.globalAlpha = 0.75;
+      ctx.fillStyle = COLORS.gold;
+      ctx.font = '500 11px "Martian Mono", ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${run.circleHalf / 2} / ${prestigeCircleSize(run.prestige + 1)}`, x, g.cy - g.target - 22);
+      ctx.textAlign = 'start';
     }
     ctx.globalAlpha = 1;
 
@@ -519,6 +572,7 @@ function equip(level) {
   game.equipped = level;
   store.set('equippedBg', level);
   setBackground(level);
+  fx.setMusicTheme(level);
   refreshUnlocks();
 }
 
@@ -630,7 +684,7 @@ async function startRun() {
     adShown: false,
     adIntent: null,
     prestige: game.profile.prestige,
-    circle: 0,
+    circleHalf: 0, // golden-circle fill in half-points
     unlocked: [],
     ended: false,
     startedAt: performance.now(),
@@ -745,20 +799,21 @@ function resolveRing(tapUs) {
   if (verdict === 'MISS') {
     run.misses++;
     run.streak = 0;
-    run.circle = 0;
+    // Same rule as applyPrestige (core.js / server): levels X1–X7 keep half the circle, X8–X10 empty it.
+    if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) run.circleHalf = circleAfterMiss(run.circleHalf, run.prestige + 1);
   } else {
     run.streak++;
     run.bestStreak = Math.max(run.bestStreak, run.streak);
     if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) {
-      // Same rule as applyPrestige (core.js / server): PERFECT fills 2, other hits 1; overflow carries over.
-      run.circle += prestigePoints(verdict);
-      while (run.prestige < PRESTIGE_MAX && run.circle >= prestigeCircleSize(run.prestige + 1)) {
-        run.circle -= prestigeCircleSize(run.prestige + 1);
+      // Same rule as applyPrestige: PERFECT +2, CLEAN +1.5, SO CLOSE +1; overflow carries over.
+      run.circleHalf += prestigeHalfPoints(verdict);
+      while (run.prestige < PRESTIGE_MAX && run.circleHalf >= prestigeCircleSize(run.prestige + 1) * 2) {
+        run.circleHalf -= prestigeCircleSize(run.prestige + 1) * 2;
         run.prestige++;
         run.unlocked.push(run.prestige);
         unlockPrestige(run.prestige);
       }
-      if (run.prestige >= PRESTIGE_MAX) run.circle = 0;
+      if (run.prestige >= PRESTIGE_MAX) run.circleHalf = 0;
     } else if (run.mode === 'ZEN' && [10, 25, 50, 100].includes(run.streak)) {
       fx.milestone();
       burst(g.cx, g.cy, COLORS.gold, 60, 520);
@@ -828,7 +883,7 @@ function showNetworkAd() {
       type: 'next',
       name: 'ranked_out_of_lives',
       beforeAd: () => fx.master?.gain.setValueAtTime(0, fx.ctx.currentTime),
-      afterAd: () => fx.master?.gain.setValueAtTime(fx.volume, fx.ctx.currentTime),
+      afterAd: () => fx.master?.gain.setValueAtTime(1, fx.ctx.currentTime),
       adBreakDone: (info) => done(info?.breakStatus === 'viewed'),
     });
     setTimeout(() => done(false), 8000); // no fill / blocked: fall back to the house popup
@@ -1092,7 +1147,10 @@ function refreshUnlocks() {
   $('unlocks-hint').textContent =
     p >= PRESTIGE_MAX
       ? 'All 100 unlocked. You reached ZERO.'
-      : `Fill the golden circle in Ranked to unlock Prestige ${p + 1}: ${Math.ceil(prestigeCircleSize(p + 1) / 2)} PERFECT taps, ${prestigeCircleSize(p + 1)} other hits, or a mix. A miss empties it.`;
+      : `Fill the golden circle in Ranked to unlock Prestige ${p + 1} (${prestigeCircleSize(p + 1)} points): PERFECT +2, CLEAN +1.5, SO CLOSE +1. ${
+          missHalvesCircle(p + 1) ? 'A miss halves the circle.' : 'Final levels of the block: a miss empties the circle.'
+        }`;
+  $('music-theme').textContent = `Now playing: ${themeName(themeIndexFor(game.equipped))}`;
   for (const btn of $('unlock-grid').querySelectorAll('.unlock-tile')) {
     const level = Number(btn.dataset.level);
     const locked = level > p;
@@ -1179,16 +1237,30 @@ $('share').addEventListener('click', async (e) => {
   }
 });
 
-const volume = $('opt-volume');
 const haptics = $('opt-haptics');
-volume.value = String(Math.round(fx.volume * 100));
-$('volume-value').textContent = volume.value;
-volume.addEventListener('input', () => {
-  fx.unlock();
-  fx.setVolume(Number(volume.value) / 100);
-  $('volume-value').textContent = volume.value;
+function bindSlider(id, valueId, initial, apply, preview) {
+  const el = $(id);
+  el.value = String(Math.round(initial * 100));
+  $(valueId).textContent = el.value;
+  el.addEventListener('input', () => {
+    fx.unlock();
+    apply(Number(el.value) / 100);
+    $(valueId).textContent = el.value;
+  });
+  if (preview) el.addEventListener('change', preview);
+}
+bindSlider('opt-music', 'music-value', fx.musicVolume, (v) => fx.setMusicVolume(v));
+bindSlider('opt-sfx', 'sfx-value', fx.sfxVolume, (v) => fx.setSfxVolume(v), () => fx.verdict('PERFECT'));
+
+// Unlock audio on the first interaction anywhere (iOS only unlocks on touchend/click, not on touchstart).
+for (const type of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  document.addEventListener(type, () => fx.unlock(), { capture: true, passive: true });
+}
+document.addEventListener('visibilitychange', () => {
+  if (!fx.ctx) return;
+  if (document.hidden) fx.ctx.suspend().catch(() => {});
+  else fx.ctx.resume().catch(() => {});
 });
-volume.addEventListener('change', () => fx.tone(880, 0.25, { gain: 0.2 })); // preview at the new level
 haptics.checked = fx.haptics;
 haptics.addEventListener('change', () => store.set('haptics', (fx.haptics = haptics.checked)));
 
@@ -1228,7 +1300,10 @@ async function connect() {
 }
 
 // Read-only test hook (used by the automated browser test). Exposes nothing the server trusts.
-if (location.hash === '#debug') window.omtDebug = game;
+if (location.hash === '#debug') {
+  window.omtDebug = game;
+  window.omtFx = fx;
+}
 
 resize();
 renderProfile();

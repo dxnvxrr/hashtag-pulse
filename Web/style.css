@@ -195,7 +195,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outl
 }
 .setting-label { display: flex; justify-content: space-between; font-size: 13px; color: var(--dim); }
 .setting-label .mono { color: var(--ring); }
-#opt-volume { width: 100%; accent-color: var(--gold); }
+#opt-music, #opt-sfx { width: 100%; accent-color: var(--gold); }
+.setting-note { margin: -4px 0 4px; font-size: 12px; color: var(--dim); }
 .toggle { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--dim); }
 .toggle input { accent-color: var(--ring); }
 .unlock-grid {
