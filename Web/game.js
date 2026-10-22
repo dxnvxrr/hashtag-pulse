@@ -8,6 +8,7 @@ import {
   toGameTimeUs,
   windowRealUs,
   prestigeCircleSize,
+  prestigePoints,
   LIVES,
   PRESTIGE_MAX,
   SLOWMO_FACTOR,
@@ -544,14 +545,15 @@ function renderHud() {
     lives.textContent = '∞';
   } else {
     $('hud-lives-label').textContent = 'LIVES';
-    const total = run.maxMisses + run.extraLives;
+    // Always 5 dots: an ad refill restores them instead of adding more.
+    const lost = Math.max(0, run.misses - run.refilledLives);
     lives.textContent = '';
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < run.maxMisses; i++) {
       const dot = document.createElement('i');
-      if (i < run.misses) dot.className = 'lost';
+      if (i < lost) dot.className = 'lost';
       lives.appendChild(dot);
     }
-    lives.setAttribute('aria-label', `${total - run.misses} lives left`);
+    lives.setAttribute('aria-label', `${run.maxMisses - lost} lives left`);
   }
   const available = run.tickets - run.slowMoRings.length - (run.armed ? 1 : 0);
   $('slowmo-count').textContent = String(Math.max(0, available));
@@ -624,7 +626,7 @@ async function startRun() {
     streak: 0,
     bestStreak: 0,
     ticks: 0,
-    extraLives: 0,
+    refilledLives: 0,
     adShown: false,
     adIntent: null,
     prestige: game.profile.prestige,
@@ -748,14 +750,15 @@ function resolveRing(tapUs) {
     run.streak++;
     run.bestStreak = Math.max(run.bestStreak, run.streak);
     if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) {
-      // Same rule as applyPrestige (core.js / server): a full golden circle unlocks the next level.
-      run.circle++;
-      if (run.circle === prestigeCircleSize(run.prestige + 1)) {
+      // Same rule as applyPrestige (core.js / server): PERFECT fills 2, other hits 1; overflow carries over.
+      run.circle += prestigePoints(verdict);
+      while (run.prestige < PRESTIGE_MAX && run.circle >= prestigeCircleSize(run.prestige + 1)) {
+        run.circle -= prestigeCircleSize(run.prestige + 1);
         run.prestige++;
-        run.circle = 0;
         run.unlocked.push(run.prestige);
         unlockPrestige(run.prestige);
       }
+      if (run.prestige >= PRESTIGE_MAX) run.circle = 0;
     } else if (run.mode === 'ZEN' && [10, 25, 50, 100].includes(run.streak)) {
       fx.milestone();
       burst(g.cx, g.cy, COLORS.gold, 60, 520);
@@ -763,7 +766,7 @@ function resolveRing(tapUs) {
   }
   renderHud();
 
-  if (run.misses >= run.maxMisses + run.extraLives) {
+  if (run.misses >= run.maxMisses + run.refilledLives) {
     if (run.mode === 'RANKED' && !run.adShown) {
       showAdPopup(resolveUs);
       return;
@@ -886,7 +889,7 @@ async function continueAfterAd() {
       if (intent?.error) throw intent.error;
       await claimGrant(intent.grantId);
     }
-    run.extraLives++;
+    run.refilledLives += run.maxMisses; // all 5 lives back
     const resumeAtUs = Math.round((performance.now() + 900 - run.ring0Perf) * 1000);
     run.resumes.push({ afterRing: run.verdicts.length - 1, atUs: resumeAtUs });
     setScreen(null);
@@ -1089,7 +1092,7 @@ function refreshUnlocks() {
   $('unlocks-hint').textContent =
     p >= PRESTIGE_MAX
       ? 'All 100 unlocked. You reached ZERO.'
-      : `Fill the golden circle in Ranked: ${prestigeCircleSize(p + 1)} hits in a row unlocks Prestige ${p + 1}. A miss empties it.`;
+      : `Fill the golden circle in Ranked to unlock Prestige ${p + 1}: ${Math.ceil(prestigeCircleSize(p + 1) / 2)} PERFECT taps, ${prestigeCircleSize(p + 1)} other hits, or a mix. A miss empties it.`;
   for (const btn of $('unlock-grid').querySelectorAll('.unlock-tile')) {
     const level = Number(btn.dataset.level);
     const locked = level > p;

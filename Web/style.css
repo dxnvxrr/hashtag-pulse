@@ -124,7 +124,7 @@ body {
 dt { font-size: 10px; letter-spacing: 0.18em; color: var(--dim); }
 dd { margin: 4px 0 0; font-size: 17px; }
 
-.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
+.modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; width: 100%; }
 .mode {
   display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 12px 6px;
   background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 10px;

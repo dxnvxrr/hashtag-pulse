@@ -117,14 +117,20 @@ export function nextRating(rating, rings) {
 
 export const PRESTIGE_MAX = 100;
 
-/** Consecutive hits needed to fill the golden circle that unlocks `level` (1..100). Deeper levels need longer streaks. */
+/** Size of the golden circle that unlocks `level` (1..100), in points: 10 up to level 25, then 15, 20, 25. */
 export function prestigeCircleSize(level) {
   return level <= 25 ? 10 : level <= 50 ? 15 : level <= 75 ? 20 : 25;
 }
 
+/** Points a verdict adds to the golden circle: a PERFECT fills twice as much as any other hit. */
+export function prestigePoints(verdict) {
+  return verdict === 'PERFECT' ? 2 : verdict === 'MISS' ? 0 : 1;
+}
+
 /**
- * Applies a run's verdicts to the player's Prestige. Any non-MISS verdict fills the circle by one; a MISS empties it.
- * A full circle unlocks the next level and starts a fresh circle. Mirrors applyPrestige on the server.
+ * Applies a run's verdicts to the player's Prestige. Hits fill the circle (PERFECT 2 points, CLEAN/CLOSE 1); a MISS
+ * empties it. A full circle unlocks the next level permanently; overflow carries into the next circle.
+ * Mirrors applyPrestige on the server.
  */
 export function applyPrestige(startLevel, verdicts) {
   let level = startLevel;
@@ -136,12 +142,13 @@ export function applyPrestige(startLevel, verdicts) {
       continue;
     }
     if (level >= PRESTIGE_MAX) continue;
-    inCircle++;
-    if (inCircle === prestigeCircleSize(level + 1)) {
+    inCircle += prestigePoints(v);
+    while (level < PRESTIGE_MAX && inCircle >= prestigeCircleSize(level + 1)) {
+      inCircle -= prestigeCircleSize(level + 1);
       level++;
       unlocked.push(level);
-      inCircle = 0;
     }
+    if (level >= PRESTIGE_MAX) inCircle = 0;
   }
   return { level, unlocked, inCircle };
 }

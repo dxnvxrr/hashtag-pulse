@@ -24,10 +24,11 @@ Controls: tap or click anywhere (or press Space) when the moving ring meets the 
 in the corner arms a ticket for the next ring.
 
 **Modes (web):**
-- **Ranked:** 5 lives. Each hit in a row fills the golden circle around the target; a full circle raises your
-  Prestige by one level (1–100) and unlocks and equips that level's animated background. A miss empties the circle.
-  Circles take 10 hits in a row up to level 25, then 15, 20, and 25 for levels 76–100. Losing the 5th life opens one
-  short ad popup per run; after it closes the player can take +1 life or end the run.
+- **Ranked:** 5 lives. Hits fill the golden circle around the target: a PERFECT fills 2 points, a CLEAN or SO
+  CLOSE fills 1, and a miss empties it. A full circle permanently raises your Prestige by one level (1–100) and
+  unlocks and equips that level's animated background; overflow carries into the next circle. Circles hold 10 points
+  up to level 25 (5 PERFECT or 10 other hits), then 15, 20, and 25 points for levels 76–100. Losing the 5th life opens
+  one short ad popup per run; after it closes the player can refill all 5 lives or end the run.
 - **Zen:** no lives, no stakes, no Prestige.
 
 **Unlocks & Sound** (title screen): a scrollable menu of all 100 backgrounds plus the default. Tap an unlocked one to

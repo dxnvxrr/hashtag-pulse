@@ -112,3 +112,17 @@ test('prestige: circle sizes, unlocks and resets match on client and server', ()
   assert.equal(progression.applyPrestige(100, hits(50) as never).level, 100);
   assert.deepEqual(web.applyPrestige(99, hits(30)).unlocked, progression.applyPrestige(99, hits(30) as never).unlocked);
 });
+
+test('prestige: a PERFECT fills twice as much as a CLEAN or CLOSE; overflow carries over', () => {
+  const P = (n: number) => Array(n).fill('PERFECT');
+  const C = (n: number) => Array(n).fill('CLOSE');
+  for (const impl of [web.applyPrestige, progression.applyPrestige]) {
+    assert.deepEqual(impl(0, P(5) as never).unlocked, [1], '5 PERFECT = level 1');
+    assert.deepEqual(impl(0, P(4) as never).unlocked, [], '4 PERFECT is not enough');
+    assert.deepEqual(impl(0, C(10) as never).unlocked, [1], '10 CLOSE = level 1');
+    assert.deepEqual(impl(0, [...P(3), ...C(4)] as never).unlocked, [1], 'a mix: 3x2 + 4x1 = 10');
+    // 9 points then a PERFECT = 11: level 1 plus 1 point carried, so 9 more points reach level 2.
+    assert.deepEqual(impl(0, [...C(9), 'PERFECT', ...C(9)] as never).unlocked, [1, 2]);
+    assert.deepEqual(impl(0, [...P(4), 'MISS', ...P(4)] as never).unlocked, [], 'a miss empties the circle');
+  }
+});

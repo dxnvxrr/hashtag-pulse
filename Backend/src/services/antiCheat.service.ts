@@ -78,6 +78,11 @@ const FIXED_BASE_DURATION_MS = 1_900;
 const SUBMIT_GRACE_MS = 15_000;
 
 /** Lives per mode. Ranked: 5. Zen: effectively unlimited. Legacy Pulse/Gauntlet/Duel (Unity build): 3. */
+/** Lives a server-verified ad gives back. Ranked refills all 5; the legacy Unity modes give +1. */
+export function refillFor(mode: RunMode): number {
+  return mode === 'RANKED' ? GameRules.rankedLives : 1;
+}
+
 export function livesFor(mode: RunMode): number {
   if (mode === 'ZEN') return GameRules.runMaxRings;
   if (mode === 'RANKED') return GameRules.rankedLives;
@@ -135,7 +140,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
       ftue: ftue ? '1' : '0',
       maxRings: String(maxRings),
       ring0Ms: String(ring0),
-      extraLives: '0',
+      refills: '0',
     })
     .expire(RedisKeys.run(run.id), GameRules.runTtlSec)
     .exec();
@@ -159,12 +164,12 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
   };
 }
 
-/** Called by the rewarded-ad flow ("Replay this exact ring"): one extra miss allowed on an active run. */
+/** Called by the rewarded-ad flow: records one refill on the active run (worth refillFor(mode) lives). */
 export async function grantExtraLife(userId: string, runId: string): Promise<boolean> {
   const key = RedisKeys.run(runId);
   const owner = await redis.hget(key, 'userId');
   if (owner !== userId) return false;
-  await redis.hincrby(key, 'extraLives', 1);
+  await redis.hincrby(key, 'refills', 1);
   return true;
 }
 
@@ -377,12 +382,12 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
     seed: Number(state.seed),
     baseDurationMs: Number(state.baseDurationMs),
     ftue: state.ftue === '1',
-    maxMisses: livesFor(mode) + Number(state.extraLives ?? 0),
+    maxMisses: livesFor(mode) + Number(state.refills ?? 0) * refillFor(mode),
     maxRings: Number(state.maxRings),
     tapsUs: input.tapsUs,
     slowMoRings: input.slowMoRings,
     resumes: input.resumes ?? [],
-    maxResumes: Number(state.extraLives ?? 0),
+    maxResumes: Number(state.refills ?? 0),
   };
   const ev = evaluateRun(evalInput);
 

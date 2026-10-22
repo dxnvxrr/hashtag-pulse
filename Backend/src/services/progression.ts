@@ -36,12 +36,17 @@ export function nextRating(rating: number, rings: RingOutcome[]): number {
 
 export const PRESTIGE_MAX = 100;
 
-/** Consecutive hits that fill the golden circle unlocking `level` (1..100). */
+/** Size of the golden circle that unlocks `level` (1..100), in points. */
 export function prestigeCircleSize(level: number): number {
   return level <= 25 ? 10 : level <= 50 ? 15 : level <= 75 ? 20 : 25;
 }
 
-/** Any non-MISS fills the circle by one; a MISS empties it; a full circle unlocks the next level. */
+/** PERFECT fills the circle twice as much as any other hit. */
+export function prestigePoints(verdict: Verdict): number {
+  return verdict === 'PERFECT' ? 2 : verdict === 'MISS' ? 0 : 1;
+}
+
+/** Hits fill the circle (PERFECT 2, others 1); a MISS empties it; overflow carries into the next circle. */
 export function applyPrestige(startLevel: number, verdicts: Verdict[]): { level: number; unlocked: number[] } {
   let level = startLevel;
   let inCircle = 0;
@@ -52,12 +57,13 @@ export function applyPrestige(startLevel: number, verdicts: Verdict[]): { level:
       continue;
     }
     if (level >= PRESTIGE_MAX) continue;
-    inCircle++;
-    if (inCircle === prestigeCircleSize(level + 1)) {
+    inCircle += prestigePoints(v);
+    while (level < PRESTIGE_MAX && inCircle >= prestigeCircleSize(level + 1)) {
+      inCircle -= prestigeCircleSize(level + 1);
       level++;
       unlocked.push(level);
-      inCircle = 0;
     }
+    if (level >= PRESTIGE_MAX) inCircle = 0;
   }
   return { level, unlocked };
 }
