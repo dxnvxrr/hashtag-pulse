@@ -8,6 +8,7 @@ import { Errors } from '../lib/errors.js';
 import { audit } from '../lib/audit.js';
 import { getSession } from './auth.service.js';
 import { baseDurationForRating, generateSchedule } from './ringSchedule.js';
+import { applyPrestige, nextRating, toGameTimeUs, windowRealUs, type RingOutcome } from './progression.js';
 import { applyLedgerEntries, toWalletView, type LedgerEntry, type WalletView } from './wallet.service.js';
 
 // ============================================================ Request signing
@@ -54,7 +55,8 @@ export async function verifyRequestSignature(p: SignedRequestParts): Promise<voi
 
 // ============================================================ Run lifecycle
 
-export type Verdict = 'PERFECT' | 'CLEAN' | 'CLOSE' | 'MISS';
+export type { Verdict } from './progression.js';
+import type { Verdict } from './progression.js';
 
 export interface RunStartResult {
   runId: string;
@@ -74,6 +76,13 @@ const FTUE_CLOSE_WINDOW_MS = 60;
 const GAUNTLET_RINGS = 25;
 const FIXED_BASE_DURATION_MS = 1_900;
 const SUBMIT_GRACE_MS = 15_000;
+
+/** Lives per mode. Ranked: 5. Zen: effectively unlimited. Legacy Pulse/Gauntlet/Duel (Unity build): 3. */
+export function livesFor(mode: RunMode): number {
+  if (mode === 'ZEN') return GameRules.runMaxRings;
+  if (mode === 'RANKED') return GameRules.rankedLives;
+  return GameRules.maxMisses;
+}
 
 function utcDay(d = new Date()): string {
   return d.toISOString().slice(0, 10);
@@ -109,7 +118,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
       seed = randomUint32();
       baseDurationMs = baseDurationForRating(user.precisionRating);
   }
-  const ftue = mode === 'PULSE' && user.bestDeltaUs === null;
+  const ftue = (mode === 'PULSE' || mode === 'RANKED') && user.bestDeltaUs === null;
   if (ftue) baseDurationMs = 2_500;
 
   const run = await prisma.run.create({ data: { userId, mode, seed: BigInt(seed), baseDurationMs, ftue } });
@@ -138,7 +147,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
     baseDurationMs,
     ftue,
     maxRings,
-    maxMisses: mode === 'ZEN' ? GameRules.runMaxRings : GameRules.maxMisses,
+    maxMisses: livesFor(mode),
     ring0ServerTimeMs: ring0,
     serverTimeMs: now,
     verdictWindowsMs: {
@@ -193,6 +202,8 @@ export interface EvaluationResult {
   bestDeltaUs: number | null;
   /** When the final ring resolved, µs after ring 0 spawn — compared with server wall clock. */
   clientEndUs: number;
+  /** Per ring, in order: verdict, game-time delta (null if untapped), whether Slow-Mo was used. */
+  rings: RingOutcome[];
 }
 
 function verdictFor(absDeltaUs: number, closeWindowMs: number): Verdict {
@@ -227,6 +238,7 @@ export function evaluateRun(input: EvaluationInput): EvaluationResult {
     totalDeltaUs: 0,
     bestDeltaUs: null,
     clientEndUs: 0,
+    rings: [],
   };
   const reject = (reason: string): EvaluationResult => ({ ...result, valid: false, rejectReason: reason });
 
@@ -261,31 +273,37 @@ export function evaluateRun(input: EvaluationInput): EvaluationResult {
         spawnUs = Math.max(spawnUs, resumeAt);
       }
     }
-    // Slow-Mo = 0.4x time → the ring takes 2.5x as long on the wall clock.
-    const durationUs = slowMo.has(i) ? ring.durationMs * 2_500 : ring.durationMs * 1_000;
+    // Slow-Mo = 0.4x time: the ring takes 2.5x as long on the wall clock and is scored in game time,
+    // so every verdict window is 2.5x wider in real time.
+    const slow = slowMo.has(i);
+    const durationUs = slow ? ring.durationMs * 2_500 : ring.durationMs * 1_000;
     const closeUs = spawnUs + durationUs;
     const closeWindowMs = input.ftue && i === 0 ? FTUE_CLOSE_WINDOW_MS : GameRules.verdict.closeMs;
+    const deadlineUs = closeUs + windowRealUs(closeWindowMs, slow);
     const tap = input.tapsUs[i]!;
 
     if (!Number.isInteger(tap)) return reject('non_integer_tap');
 
     let verdict: Verdict;
+    let gameDelta: number | null = null;
     if (tap === -1) {
       verdict = 'MISS';
-      resolveUs = closeUs + closeWindowMs * 1000;
+      resolveUs = deadlineUs;
     } else {
       if (tap < spawnUs) return reject('tap_before_spawn');
-      if (tap > closeUs + closeWindowMs * 1000) return reject('tap_after_window');
+      if (tap > deadlineUs) return reject('tap_after_window');
       if (tap - spawnUs < GameRules.humanReactionFloorMs * 1000) result.flags.push(`inhuman_reaction:${i}`);
-      const delta = tap - closeUs;
-      const abs = Math.abs(delta);
+      gameDelta = toGameTimeUs(tap - closeUs, slow);
+      const abs = Math.abs(gameDelta);
       verdict = verdictFor(abs, closeWindowMs);
-      result.deltasUs.push(delta);
-      signedDeltasMs.push(delta / 1000);
+      result.deltasUs.push(gameDelta);
+      signedDeltasMs.push(gameDelta / 1000);
       result.totalDeltaUs += abs;
-      if (result.bestDeltaUs === null || abs < result.bestDeltaUs) result.bestDeltaUs = abs;
+      // Best tap is a skill record: Slow-Mo rings never count toward it.
+      if (!slow && (result.bestDeltaUs === null || abs < result.bestDeltaUs)) result.bestDeltaUs = abs;
       resolveUs = tap;
     }
+    result.rings.push({ verdict, deltaUs: gameDelta, slow });
 
     result.verdicts.push(verdict);
     if (verdict === 'PERFECT') result.perfects++;
@@ -340,6 +358,8 @@ export interface RunSubmitResult {
   newBestDeltaUs: number;
   personalBest: boolean;
   precisionRating: number;
+  prestige: number;
+  prestigeUnlocked: number[];
   wallet: WalletView | null;
   reason?: string;
 }
@@ -357,7 +377,7 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
     seed: Number(state.seed),
     baseDurationMs: Number(state.baseDurationMs),
     ftue: state.ftue === '1',
-    maxMisses: (mode === 'ZEN' ? GameRules.runMaxRings : GameRules.maxMisses) + Number(state.extraLives ?? 0),
+    maxMisses: livesFor(mode) + Number(state.extraLives ?? 0),
     maxRings: Number(state.maxRings),
     tapsUs: input.tapsUs,
     slowMoRings: input.slowMoRings,
@@ -405,6 +425,8 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       newBestDeltaUs: user.bestDeltaUs ?? -1,
       personalBest: false,
       precisionRating: user.precisionRating,
+      prestige: user.prestige,
+      prestigeUnlocked: [],
       wallet: null,
       reason: ev.rejectReason ?? 'flagged_for_review',
     };
@@ -421,16 +443,10 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
     ticks = Math.min(ticks, GameRules.maxTicksPerRun);
   }
 
-  // ---- Precision rating (ELO-like): performance vs expectation, Pulse only, needs a meaningful sample.
-  let rating = user.precisionRating;
-  if (mode === 'PULSE' && ev.verdicts.length >= 5) {
-    // Untapped rings score 0; tapped rings score linearly from 1 (0 ms) to 0 (close window edge or worse).
-    let scoreSum = 0;
-    for (const d of ev.deltasUs) scoreSum += Math.max(0, 1 - Math.abs(d) / 1000 / GameRules.verdict.closeMs);
-    const performance = scoreSum / ev.verdicts.length;
-    const expected = rating / 3000;
-    rating = Math.max(0, Math.min(3000, Math.round(rating + 64 * (performance - expected))));
-  }
+  // ---- Precision rating (ELO-like) and Prestige: competitive modes only.
+  const competitive = mode === 'PULSE' || mode === 'RANKED';
+  const rating = competitive ? nextRating(user.precisionRating, ev.rings) : user.precisionRating;
+  const prestige = mode === 'RANKED' ? applyPrestige(user.prestige, ev.verdicts) : { level: user.prestige, unlocked: [] as number[] };
 
   const personalBest = ev.bestDeltaUs !== null && (user.bestDeltaUs === null || ev.bestDeltaUs < user.bestDeltaUs);
   const newBest = personalBest ? ev.bestDeltaUs : user.bestDeltaUs;
@@ -467,7 +483,7 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
           ticksAwarded: ticks,
         },
       });
-      await tx.user.update({ where: { id: userId }, data: { precisionRating: rating, bestDeltaUs: newBest } });
+      await tx.user.update({ where: { id: userId }, data: { precisionRating: rating, bestDeltaUs: newBest, prestige: prestige.level } });
       return w;
     });
 
@@ -487,6 +503,8 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       newBestDeltaUs: newBest ?? -1,
       personalBest,
       precisionRating: rating,
+      prestige: prestige.level,
+      prestigeUnlocked: prestige.unlocked,
       wallet: toWalletView(wallet),
     };
   } catch (err) {

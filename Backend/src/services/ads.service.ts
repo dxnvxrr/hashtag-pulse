@@ -116,6 +116,14 @@ export async function getAdGrantStatus(userId: string, grantId: string) {
   return { grantId, status: reward.status, placement: reward.placement };
 }
 
+/** Web H5 ads: the client attests it showed the ad. Off unless WEB_ADS_CLIENT_ATTESTED=true; caps still apply. */
+export async function attestWebAd(userId: string, grantId: string, ip: string) {
+  if (!config.WEB_ADS_CLIENT_ATTESTED) throw Errors.notFound('not_found');
+  const reward = await prisma.adReward.findUnique({ where: { id: grantId } });
+  if (!reward || reward.userId !== userId) throw Errors.notFound('grant_not_found');
+  return { outcome: await fulfil(grantId, `web-attest-${grantId}`, ip) };
+}
+
 /** Development only: simulates the S2S callback so the full loop is testable in the Unity Editor. */
 export async function devCompleteAd(userId: string, grantId: string, ip: string) {
   if (isProduction) throw Errors.notFound('not_found');

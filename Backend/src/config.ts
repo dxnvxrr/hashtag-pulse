@@ -50,6 +50,13 @@ const EnvSchema = z.object({
   GOOGLE_PLAY_SERVICE_ACCOUNT_KEY: pem,
 
   LEVELPLAY_SSV_PRIVATE_KEY: z.string().default(''),
+  /**
+   * Web ads (Google H5 Games Ads) send no server-to-server callback, so a web reward can only be client-attested.
+   * When true, /v1/ads/attest accepts that attestation — still bounded by the per-placement cooldown and daily cap.
+   */
+  /** Google AdSense publisher id (ca-pub-…) for H5 Games Ads on the web client. Empty = house popup only. */
+  WEB_AD_CLIENT: z.string().default(''),
+  WEB_ADS_CLIENT_ATTESTED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -89,6 +96,7 @@ export const GameRules = {
   runMaxRings: 500,
   runTtlSec: 60 * 60,
   maxMisses: 3,
+  rankedLives: 5,
 
   ticksPerPerfect: 5,
   ticksPerClean: 2,

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { GameRules } from '../config.js';
+import { config, GameRules, isProduction } from '../config.js';
 import { gauntletLeaderboard, serverTime, startRun, submitRun } from '../services/antiCheat.service.js';
 import { prisma } from '../lib/prisma.js';
 import { Errors } from '../lib/errors.js';
@@ -8,7 +8,7 @@ import { getWallet } from '../services/wallet.service.js';
 import { authOf, requireSignedAuth } from '../plugins/authenticate.js';
 
 const StartBody = z.object({
-  mode: z.enum(['PULSE', 'GAUNTLET', 'DUEL', 'ZEN']),
+  mode: z.enum(['RANKED', 'ZEN', 'PULSE', 'GAUNTLET', 'DUEL']),
   duelSeed: z.number().int().min(0).max(0xffffffff).optional(),
 });
 
@@ -40,14 +40,17 @@ export async function gameController(app: FastifyInstance): Promise<void> {
 
   app.get('/v1/profile', { preHandler: requireSignedAuth }, async (req) => {
     const userId = authOf(req).sub;
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { precisionRating: true, bestDeltaUs: true } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { precisionRating: true, bestDeltaUs: true, prestige: true } });
     if (!user) throw Errors.notFound('user_not_found');
     return {
       userId,
       precisionRating: user.precisionRating,
+      prestige: user.prestige,
       // -1 instead of null: Unity's JsonUtility cannot read null into a number.
       bestDeltaUs: user.bestDeltaUs ?? -1,
       wallet: await getWallet(userId),
+      // How a web client may claim an ad reward: client attestation, the dev simulator, or not at all.
+      webAdRewards: config.WEB_ADS_CLIENT_ATTESTED ? 'attest' : isProduction ? 'none' : 'dev',
     };
   });
 

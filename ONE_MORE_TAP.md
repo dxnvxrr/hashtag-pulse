@@ -21,8 +21,25 @@ from `Backend/` and open `http://localhost:8080/play/`.
 Opened anywhere without the backend, the game scores runs on the device and says so.
 
 Controls: tap or click anywhere (or press Space) when the moving ring meets the inner circle. The SLOW-MO button
-in the corner arms a ticket for the next ring. In Pulse, after your third miss you're offered one simulated
-rewarded ad for an extra life. In development mode the server verifies it through `/v1/ads/dev-complete`.
+in the corner arms a ticket for the next ring.
+
+**Modes (web):**
+- **Ranked:** 5 lives. Each hit in a row fills the golden circle around the target; a full circle raises your
+  Prestige by one level (1–100) and unlocks and equips that level's animated background. A miss empties the circle.
+  Circles take 10 hits in a row up to level 25, then 15, 20, and 25 for levels 76–100. Losing the 5th life opens one
+  short ad popup per run; after it closes the player can take +1 life or end the run.
+- **Zen:** no lives, no stakes, no Prestige.
+
+**Unlocks & Sound** (title screen): a scrollable menu of all 100 backgrounds plus the default. Tap an unlocked one to
+equip it. The menu also holds the volume slider and the haptics toggle. Level 100, ZERO, stays hidden until earned.
+
+**Slow-Mo** rings run at 0.4x and are scored in game time, so every verdict window is 2.5x wider in real time.
+Slow-Mo rings never count toward your best tap or Precision rating, because tickets can be bought.
+
+**Ads on the web:** set `WEB_AD_CLIENT=ca-pub-…` (an approved Google AdSense account with H5 Games Ads) and the
+server adds the ad tag and the CSP hosts it needs. Without it the popup is a house ad and earns nothing. Web ads send
+no server callback, so extra lives are claimed by client attestation (`WEB_ADS_CLIENT_ATTESTED=true`), still limited
+by the server's cool-down and daily cap. In development the dev simulator is used instead.
 
 ## Tests
 
@@ -31,7 +48,8 @@ cd Backend && npm test
 ```
 
 - Ring-schedule golden vectors (TypeScript ≡ C# ≡ web).
-- Verdict windows, bot and reaction-floor flags, slow-mo, rewarded-ad resumes.
+- Verdict windows, bot and reaction-floor flags, slow-mo in game time, rewarded-ad resumes.
+- Prestige circles and rating: web client ≡ server.
 - Web client verdicts versus server re-simulation.
 - Unity `RunSession` versus server re-simulation. Needs `mcs` and `mono`; the test is skipped when they're absent.
 
@@ -67,6 +85,8 @@ Optional SDKs compile only when their scripting define is set:
 - **Slow-Mo** is a dedicated button, not the GDD's long-press. Taps fire on press-down, so every long-press would
   also have been a tap.
 - **Offline runs** are practice only. They're never rewarded, because the server must issue the run seed.
+- **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes and no Prestige or backgrounds. The web build is
+  the lead client for now. The server keeps the older modes so the Unity build still works.
 
 ## Background jobs (run inside the API, single-flight via a Redis lock)
 

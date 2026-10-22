@@ -59,6 +59,7 @@ enum PurchaseStatus {
 }
 
 enum RunMode {
+  RANKED
   PULSE
   GAUNTLET
   DUEL
@@ -86,6 +87,8 @@ model User {
   precisionRating Int        @default(1000)
   /// Best single-tap delta in microseconds (lower is better).
   bestDeltaUs     Int?
+  /// Prestige level 0–100: golden circles filled in Ranked. Each level unlocks a background.
+  prestige        Int        @default(0)
   /// COPPA: under-13 accounts get no personalised ads, no social, minimal telemetry.
   isMinor         Boolean    @default(false)
   /// Set once the player answers the age gate; afterwards isMinor can only become stricter.

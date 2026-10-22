@@ -11,20 +11,28 @@ const FILES: Record<string, string> = {
   'index.html': 'text/html; charset=utf-8',
   'game.js': 'text/javascript; charset=utf-8',
   'core.js': 'text/javascript; charset=utf-8',
+  'backgrounds.js': 'text/javascript; charset=utf-8',
   'style.css': 'text/css; charset=utf-8',
 };
 
-const PAGE_CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' https://fonts.googleapis.com",
-  'font-src https://fonts.gstatic.com',
-  "connect-src 'self'",
-  "img-src 'self' data:",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
+// Hosts Google's H5 Games Ads needs when WEB_AD_CLIENT is set (script, ad iframes, beacons, creatives).
+const AD_HOSTS = 'https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com https://*.gstatic.com https://*.googleadservices.com https://*.adtrafficquality.google';
+
+function pageCsp(ads: boolean): string {
+  return [
+    "default-src 'none'",
+    `script-src 'self'${ads ? ` ${AD_HOSTS}` : ''}`,
+    // Ad creatives inject inline styles; without ads the page needs none.
+    `style-src 'self'${ads ? " 'unsafe-inline'" : ''} https://fonts.googleapis.com`,
+    'font-src https://fonts.gstatic.com',
+    `connect-src 'self'${ads ? ` ${AD_HOSTS}` : ''}`,
+    `img-src 'self' data:${ads ? ' https:' : ''}`,
+    ads ? `frame-src ${AD_HOSTS}` : "frame-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
 
 export async function webController(app: FastifyInstance): Promise<void> {
   if (!config.WEB_ROOT) return;
@@ -34,10 +42,15 @@ export async function webController(app: FastifyInstance): Promise<void> {
   const send = async (name: string, reply: import('fastify').FastifyReply) => {
     const type = FILES[name];
     if (!type) return reply.code(404).send({ error: 'not_found' });
-    const body = await readFile(resolve(root, name));
+    let body: Buffer | string = await readFile(resolve(root, name));
+    const ads = /^ca-pub-\d{10,20}$/.test(config.WEB_AD_CLIENT);
+    if (name === 'index.html' && ads) {
+      // The client turns ads on when it finds this tag (Web/game.js loadAdNetwork).
+      body = body.toString('utf8').replace('<!--ARTIFACT-HEAD-START-->', `<meta name="omt-ad-client" content="${config.WEB_AD_CLIENT}">\n<!--ARTIFACT-HEAD-START-->`);
+    }
     return reply
       .header('content-type', type)
-      .header('content-security-policy', PAGE_CSP)
+      .header('content-security-policy', pageCsp(ads))
       .header('cache-control', 'no-cache')
       .send(body);
   };

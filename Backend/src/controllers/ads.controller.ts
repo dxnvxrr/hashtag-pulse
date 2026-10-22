@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { createAdIntent, devCompleteAd, getAdGrantStatus, handleLevelPlayCallback, isPlacement } from '../services/ads.service.js';
+import { attestWebAd, createAdIntent, devCompleteAd, getAdGrantStatus, handleLevelPlayCallback, isPlacement } from '../services/ads.service.js';
 import { authOf, requireSignedAuth } from '../plugins/authenticate.js';
 import { Errors } from '../lib/errors.js';
 import { isProduction } from '../config.js';
@@ -27,6 +27,11 @@ export async function adsController(app: FastifyInstance): Promise<void> {
   app.get('/v1/ads/ssv/levelplay', { config: { rateLimit: { max: 200, timeWindow: '1 second' } } }, async (req, reply) => {
     const ack = await handleLevelPlayCallback(req.query as Record<string, string | undefined>, req.ip);
     return reply.type('text/plain').send(ack);
+  });
+
+  app.post<{ Params: { grantId: string } }>('/v1/ads/attest/:grantId', { preHandler: requireSignedAuth }, async (req) => {
+    const grantId = z.string().uuid().parse(req.params.grantId);
+    return attestWebAd(authOf(req).sub, grantId, req.ip);
   });
 
   if (!isProduction) {

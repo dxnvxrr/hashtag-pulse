@@ -103,7 +103,7 @@ namespace OneMoreTap.Core
                 long durationUs = _current.CloseUs - _current.SpawnUs;
                 _current.SlowMo = true;
                 _current.CloseUs = _current.SpawnUs + durationUs * SlowMoNumerator / SlowMoDenominator;
-                _current.DeadlineUs = _current.CloseUs + _current.CloseWindowMs * 1000L;
+                _current.DeadlineUs = _current.CloseUs + WindowRealUs(_current.CloseWindowMs, true);
                 _slowMoRings.Add(_current.Index);
                 return true;
             }
@@ -177,6 +177,12 @@ namespace OneMoreTap.Core
 
         // ------------------------------------------------------------------ Internals
 
+        /// <summary>Real time → game time on a Slow-Mo ring (x2/5, truncated toward zero like the server's Math.trunc).</summary>
+        public static long ToGameTimeUs(long realDeltaUs, bool slow) => slow ? realDeltaUs * SlowMoDenominator / SlowMoNumerator : realDeltaUs;
+
+        /// <summary>Real-time length of a close window.</summary>
+        public static long WindowRealUs(int windowMs, bool slow) => slow ? windowMs * 1000L * SlowMoNumerator / SlowMoDenominator : windowMs * 1000L;
+
         private RingResult Resolve(long tapUs)
         {
             int i = _current.Index;
@@ -190,12 +196,14 @@ namespace OneMoreTap.Core
             }
             else
             {
-                delta = tapUs - _current.CloseUs;
+                // Slow-Mo rings are scored in game time (0.4x), so every window is 2.5x wider in real time.
+                delta = ToGameTimeUs(tapUs - _current.CloseUs, _current.SlowMo);
                 long abs = delta < 0 ? -delta : delta;
                 verdict = VerdictRules.Classify(abs, Ftue && i == 0);
                 _taps[i] = tapUs;
                 _lastResolveUs = tapUs;
-                if (BestAbsDeltaUs < 0 || abs < BestAbsDeltaUs) BestAbsDeltaUs = abs;
+                // Best tap is a skill record: a purchasable Slow-Mo ring never counts toward it.
+                if (!_current.SlowMo && (BestAbsDeltaUs < 0 || abs < BestAbsDeltaUs)) BestAbsDeltaUs = abs;
             }
             _verdicts[i] = verdict;
             RingsResolved = i + 1;
@@ -245,7 +253,7 @@ namespace OneMoreTap.Core
                 SlowMo = slow,
                 SpawnUs = spawnUs,
                 CloseUs = spawnUs + durationUs,
-                DeadlineUs = spawnUs + durationUs + windowMs * 1000L,
+                DeadlineUs = spawnUs + durationUs + WindowRealUs(windowMs, slow),
                 CloseWindowMs = windowMs,
             };
             _hasCurrent = true;

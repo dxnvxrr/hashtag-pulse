@@ -5,10 +5,15 @@ import {
   ticksFor,
   nextRating,
   baseDurationForRating,
-  offlineGauntletSeed,
+  toGameTimeUs,
+  windowRealUs,
+  prestigeCircleSize,
+  LIVES,
+  PRESTIGE_MAX,
   SLOWMO_FACTOR,
   HUMAN_REACTION_FLOOR_MS,
 } from './core.js';
+import { drawBackground, drawThumbnail, themeInfo } from './backgrounds.js';
 
 // ============================================================ Storage (per-browser conveniences only)
 
@@ -172,7 +177,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const fx = {
   ctx: null,
-  sound: store.get('sound', true),
+  master: null,
+  volume: Math.min(1, Math.max(0, Number(store.get('volume', 0.8)) || 0)),
   haptics: store.get('haptics', true),
   reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
 
@@ -180,12 +186,20 @@ const fx = {
     if (this.ctx) return;
     try {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.volume;
+      this.master.connect(this.ctx.destination);
     } catch {
       this.ctx = null;
     }
   },
+  setVolume(v) {
+    this.volume = v;
+    store.set('volume', v);
+    if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  },
   tone(freq, dur, { type = 'sine', gain = 0.18, endFreq = null, delay = 0 } = {}) {
-    if (!this.sound || !this.ctx) return;
+    if (!this.ctx || this.volume <= 0) return;
     const t = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
@@ -195,7 +209,7 @@ const fx = {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(this.ctx.destination);
+    osc.connect(g).connect(this.master);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   },
@@ -229,6 +243,11 @@ const fx = {
     [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.18, { gain: 0.12, delay: i * 0.07 }));
     this.vibrate([30, 60, 30, 60, 45]);
   },
+  prestige() {
+    [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => this.tone(f, 0.32, { gain: 0.13, delay: i * 0.06 }));
+    this.tone(1760, 0.8, { gain: 0.05, delay: 0.38 });
+    this.vibrate([40, 50, 40, 50, 40, 50, 90]);
+  },
 };
 
 // ============================================================ Rendering
@@ -240,12 +259,49 @@ let W = 0;
 let H = 0;
 let DPR = 1;
 
+const bgCanvas = $('bg');
+const bgCtx = bgCanvas.getContext('2d');
+
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = canvas.clientWidth;
   H = canvas.clientHeight;
-  canvas.width = Math.round(W * DPR);
-  canvas.height = Math.round(H * DPR);
+  for (const c of [canvas, bgCanvas]) {
+    c.width = Math.round(W * DPR);
+    c.height = Math.round(H * DPR);
+  }
+  bgDirty = true;
+}
+
+// ---- Prestige background layer (its own canvas, drawn under the ring)
+let bgLevel = 0;
+let bgDirty = true;
+const bgEpoch = performance.now();
+
+function setBackground(level) {
+  if (level === bgLevel) return;
+  // Short CSS crossfade: fade out, swap scene, fade in.
+  bgCanvas.style.opacity = '0';
+  setTimeout(() => {
+    bgLevel = level;
+    bgDirty = true;
+    bgCanvas.style.opacity = '1';
+  }, 220);
+}
+
+function renderBackground(now) {
+  if (bgLevel === 0) {
+    if (bgDirty) bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+    bgDirty = false;
+    return;
+  }
+  // Reduced motion: a still frame, redrawn only when something changes.
+  if (fx.reducedMotion && !bgDirty) return;
+  const g = geometry();
+  bgCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const t = fx.reducedMotion ? 4.2 : (now - bgEpoch) / 1000;
+  drawBackground(bgCtx, W, H, t, bgLevel, g.cx, g.cy, game.run ? g.start : 0);
+  bgDirty = false;
 }
 window.addEventListener('resize', resize);
 
@@ -318,6 +374,7 @@ function render(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
 
+  renderBackground(now);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   const g = geometry();
@@ -337,16 +394,31 @@ function render(now) {
       x = g.cx + ring.drift * Math.min(W * 0.22, 160) * (p - 0.5) * 2;
     }
 
-    // Streak progress arc around the target circle (GDD: streak shown as a thin ring around the tap target).
-    const nextMilestone = [10, 25, 50, 100].find((m) => m > run.streak) ?? run.streak + 50;
-    const prevMilestone = [0, 10, 25, 50, 100].filter((m) => m <= run.streak).pop() ?? 0;
-    const frac = (run.streak - prevMilestone) / (nextMilestone - prevMilestone);
+    // The golden circle around the target. Ranked: fills one segment per hit in a row; full = next Prestige level.
+    // Zen: shows progress to the next streak milestone.
+    let frac;
+    if (run.mode === 'RANKED') {
+      frac = run.prestige >= PRESTIGE_MAX ? 1 : run.circle / prestigeCircleSize(run.prestige + 1);
+    } else {
+      const nextMilestone = [10, 25, 50, 100].find((m) => m > run.streak) ?? run.streak + 50;
+      const prevMilestone = [0, 10, 25, 50, 100].filter((m) => m <= run.streak).pop() ?? 0;
+      frac = (run.streak - prevMilestone) / (nextMilestone - prevMilestone);
+    }
     ctx.strokeStyle = COLORS.gold;
-    ctx.globalAlpha = 0.6;
-    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.14;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x, g.cy, g.target + 10, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+    ctx.arc(x, g.cy, g.target + 11, 0, Math.PI * 2);
     ctx.stroke();
+    if (frac > 0) {
+      ctx.globalAlpha = 0.9;
+      ctx.shadowColor = COLORS.gold;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(x, g.cy, g.target + 11, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
     ctx.globalAlpha = 1;
 
     drawCircle(x, g.cy, g.target, COLORS.target, 2);
@@ -402,16 +474,22 @@ function render(now) {
 
 const api = new Api();
 
+const MODES = ['RANKED', 'ZEN'];
+
 const game = {
   online: false,
-  mode: store.get('mode', 'PULSE'),
+  mode: MODES.includes(store.get('mode', 'RANKED')) ? store.get('mode', 'RANKED') : 'RANKED',
   run: null,
   profile: {
     rating: store.get('rating', 1000),
     bestUs: store.get('bestUs', null),
     ticks: store.get('ticks', 0),
     slowMoTickets: store.get('slowMoTickets', 3),
+    prestige: Math.min(PRESTIGE_MAX, Math.max(0, Number(store.get('prestige', 0)) || 0)),
   },
+  equipped: Number(store.get('equippedBg', 0)) || 0,
+  /** How the server lets this client claim an ad reward: 'attest' | 'dev' | 'none' (offline: local). */
+  webAdRewards: 'local',
 };
 
 function fmtDelta(us, signed = true) {
@@ -421,17 +499,38 @@ function fmtDelta(us, signed = true) {
 }
 
 function setScreen(id) {
-  for (const s of ['title-screen', 'results-screen', 'continue-screen']) $(s).hidden = s !== id;
+  for (const s of ['title-screen', 'results-screen', 'ad-screen', 'unlocks-screen']) $(s).hidden = s !== id;
   const playing = id === null;
   $('hud').hidden = !playing;
-  $('slowmo').hidden = !playing || game.run?.mode === 'GAUNTLET';
+  $('slowmo').hidden = !playing;
 }
 
 function renderProfile() {
   const p = game.profile;
   $('profile-best').textContent = p.bestUs === null ? '—' : fmtDelta(p.bestUs, false);
   $('profile-rating').textContent = String(p.rating);
-  $('profile-ticks').textContent = String(p.ticks);
+  $('profile-prestige').textContent = String(p.prestige);
+}
+
+/** Equips a background the player has unlocked (0 = default). */
+function equip(level) {
+  if (level < 0 || level > game.profile.prestige) return;
+  game.equipped = level;
+  store.set('equippedBg', level);
+  setBackground(level);
+  refreshUnlocks();
+}
+
+let toastTimer = 0;
+function showToast(level) {
+  const t = $('toast');
+  $('toast-level').textContent = String(level);
+  $('toast-name').textContent = themeInfo(level).name;
+  t.hidden = true;
+  void t.offsetWidth; // restart the CSS animation
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
 
 function renderHud() {
@@ -486,7 +585,7 @@ async function startRun() {
         base: res.baseDurationMs,
         ftue: res.ftue,
         maxRings: res.maxRings,
-        maxMisses: mode === 'ZEN' ? Infinity : res.maxMisses,
+        maxMisses: LIVES[mode],
         ring0Perf: Math.max(performance.now() + 300, api.serverToPerf(res.ring0ServerTimeMs)),
       };
     } catch (e) {
@@ -495,15 +594,14 @@ async function startRun() {
     }
   }
   if (!params) {
-    const day = new Date().toISOString().slice(0, 10);
-    const ftue = mode === 'PULSE' && game.profile.bestUs === null;
+    const ftue = mode === 'RANKED' && game.profile.bestUs === null;
     params = {
       runId: null,
-      seed: mode === 'GAUNTLET' ? offlineGauntletSeed(day) : crypto.getRandomValues(new Uint32Array(1))[0],
-      base: ftue ? 2500 : mode === 'PULSE' || mode === 'ZEN' ? baseDurationForRating(game.profile.rating) : 1900,
+      seed: crypto.getRandomValues(new Uint32Array(1))[0],
+      base: ftue ? 2500 : baseDurationForRating(game.profile.rating),
       ftue,
-      maxRings: mode === 'GAUNTLET' ? 25 : 500,
-      maxMisses: mode === 'ZEN' ? Infinity : 3,
+      maxRings: 500,
+      maxMisses: LIVES[mode],
       ring0Perf: performance.now() + 900,
     };
   }
@@ -517,6 +615,7 @@ async function startRun() {
     tapsUs: [],
     deltasUs: [],
     verdicts: [],
+    rings: [],
     slowMoRings: [],
     resumes: [],
     armed: false,
@@ -526,7 +625,11 @@ async function startRun() {
     bestStreak: 0,
     ticks: 0,
     extraLives: 0,
-    adOffered: false,
+    adShown: false,
+    adIntent: null,
+    prestige: game.profile.prestige,
+    circle: 0,
+    unlocked: [],
     ended: false,
     startedAt: performance.now(),
   };
@@ -556,7 +659,7 @@ function scheduleRing(resolveUs, resumeAtUs = null) {
     slow,
     spawnUs,
     closeUs: spawnUs + durationUs,
-    deadlineUs: spawnUs + durationUs + windowMs * 1000,
+    deadlineUs: spawnUs + durationUs + windowRealUs(windowMs, slow),
     windowMs,
     spawnPerf: run.ring0Perf + spawnUs / 1000,
     closePerf: run.ring0Perf + (spawnUs + durationUs) / 1000,
@@ -606,7 +709,8 @@ function resolveRing(tapUs) {
     run.tapsUs.push(-1);
     resolveUs = ring.deadlineUs;
   } else {
-    deltaUs = tapUs - ring.closeUs;
+    // Slow-Mo rings are scored in game time, so their windows are 2.5x wider in real time.
+    deltaUs = toGameTimeUs(tapUs - ring.closeUs, ring.slow);
     verdict = classify(Math.abs(deltaUs), ring.windowMs);
     run.tapsUs.push(tapUs);
     run.deltasUs.push(deltaUs);
@@ -615,6 +719,7 @@ function resolveRing(tapUs) {
     $('hint').hidden = true;
   }
   run.verdicts.push(verdict);
+  run.rings.push({ verdict, deltaUs: tapUs === null ? null : deltaUs, slow: ring.slow });
   run.ticks += ticksFor(verdict);
 
   fx.verdict(verdict);
@@ -638,10 +743,20 @@ function resolveRing(tapUs) {
   if (verdict === 'MISS') {
     run.misses++;
     run.streak = 0;
+    run.circle = 0;
   } else {
     run.streak++;
     run.bestStreak = Math.max(run.bestStreak, run.streak);
-    if ([10, 25, 50, 100].includes(run.streak)) {
+    if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) {
+      // Same rule as applyPrestige (core.js / server): a full golden circle unlocks the next level.
+      run.circle++;
+      if (run.circle === prestigeCircleSize(run.prestige + 1)) {
+        run.prestige++;
+        run.circle = 0;
+        run.unlocked.push(run.prestige);
+        unlockPrestige(run.prestige);
+      }
+    } else if (run.mode === 'ZEN' && [10, 25, 50, 100].includes(run.streak)) {
       fx.milestone();
       burst(g.cx, g.cy, COLORS.gold, 60, 520);
     }
@@ -649,11 +764,8 @@ function resolveRing(tapUs) {
   renderHud();
 
   if (run.misses >= run.maxMisses + run.extraLives) {
-    if (run.mode === 'PULSE' && !run.adOffered && run.verdicts.length >= 5) {
-      run.adOffered = true;
-      run.pendingResolveUs = resolveUs;
-      setScreen('continue-screen');
-      $('ad-status').textContent = '';
+    if (run.mode === 'RANKED' && !run.adShown) {
+      showAdPopup(resolveUs);
       return;
     }
     endRun();
@@ -664,29 +776,115 @@ function resolveRing(tapUs) {
   }
 }
 
-// ---- Rewarded ad continue ("Replay this exact ring" placement, server-validated when online)
-async function watchAdToContinue() {
+/** A full golden circle mid-run: celebrate, unlock and equip the new background straight away. */
+function unlockPrestige(level) {
+  const g = geometry();
+  fx.prestige();
+  shockwave(g.cx, g.cy, g.target, COLORS.gold);
+  shockwave(g.cx, g.cy, g.target * 1.6, COLORS.gold);
+  burst(g.cx, g.cy, COLORS.gold, 80, 600);
+  showToast(level);
+  // Kept locally so the background appears now; the server confirms the level when the run is submitted.
+  game.profile.prestige = Math.max(game.profile.prestige, level);
+  store.set('prestige', game.profile.prestige);
+  equip(level);
+}
+
+// ============================================================ Ads
+// Ranked: losing the 5th life opens one short ad popup per run. Watching it lets the player keep going with +1 life.
+// A real ad network (Google H5 Games Ads) is used when the page carries <meta name="omt-ad-client">; otherwise a
+// house popup is shown, which earns nothing.
+
+const adClient = document.querySelector('meta[name="omt-ad-client"]')?.content ?? '';
+
+function loadAdNetwork() {
+  if (!adClient || window.adBreak) return;
+  window.adsbygoogle = window.adsbygoogle || [];
+  window.adBreak = window.adConfig = (o) => window.adsbygoogle.push(o);
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adClient)}`;
+  script.dataset.adFrequencyHint = '30s';
+  script.crossOrigin = 'anonymous';
+  document.head.append(script);
+  window.adConfig({ preloadAdBreaks: 'on', sound: 'on' });
+}
+
+/** Resolves true when the ad network showed an interstitial. */
+function showNetworkAd() {
+  if (!adClient || !window.adBreak) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (viewed) => {
+      if (!settled) {
+        settled = true;
+        resolve(viewed);
+      }
+    };
+    window.adBreak({
+      type: 'next',
+      name: 'ranked_out_of_lives',
+      beforeAd: () => fx.master?.gain.setValueAtTime(0, fx.ctx.currentTime),
+      afterAd: () => fx.master?.gain.setValueAtTime(fx.volume, fx.ctx.currentTime),
+      adBreakDone: (info) => done(info?.breakStatus === 'viewed'),
+    });
+    setTimeout(() => done(false), 8000); // no fill / blocked: fall back to the house popup
+  });
+}
+
+async function showHousePopup(seconds = 5) {
+  const cd = $('ad-countdown');
+  cd.hidden = false;
+  for (let s = seconds; s > 0; s--) {
+    cd.textContent = `Ad closes in ${s}s`;
+    await sleep(1000);
+  }
+  cd.hidden = true;
+}
+
+async function showAdPopup(resolveUs) {
+  const run = game.run;
+  run.adShown = true;
+  run.pendingResolveUs = resolveUs;
+  $('ad-actions').hidden = true;
+  $('ad-status').textContent = '';
+  $('ad-continue').disabled = false;
+  setScreen('ad-screen');
+  // Ask the server for a one-time grant while the ad plays (cool-down and daily cap are enforced there).
+  run.adIntent = run.online
+    ? api.request('POST', '/v1/ads/intent', { placement: 'replay_ring', runId: run.runId }).catch((e) => ({ error: e }))
+    : null;
+  const viewed = await showNetworkAd();
+  if (!viewed) await showHousePopup();
+  if (game.run !== run || run.ended) return;
+  $('ad-actions').hidden = false;
+  // This server doesn't accept web ad rewards: the popup still shows, but there's no extra life to offer.
+  const canContinue = !run.online || game.webAdRewards !== 'none';
+  $('ad-continue').hidden = !canContinue;
+  (canContinue ? $('ad-continue') : $('ad-end')).focus();
+}
+
+/** Claims the grant: web ads have no server callback, so the client attests (or uses the dev simulator). */
+async function claimGrant(grantId) {
+  const path = game.webAdRewards === 'attest' ? `/v1/ads/attest/${grantId}` : `/v1/ads/dev-complete/${grantId}`;
+  await api.request('POST', path, {});
+  for (let i = 0; i < 8; i++) {
+    if ((await api.request('GET', `/v1/ads/grant/${grantId}`)).status === 'GRANTED') return;
+    await sleep(400);
+  }
+  throw new ApiError(408, 'grant_timeout', 'Reward not confirmed');
+}
+
+async function continueAfterAd() {
   const run = game.run;
   const status = $('ad-status');
-  $('continue-ad').disabled = true;
+  $('ad-continue').disabled = true;
   try {
-    let grantId = null;
     if (run.online) {
-      grantId = (await api.request('POST', '/v1/ads/intent', { placement: 'replay_ring', runId: run.runId })).grantId;
-    }
-    for (let s = 3; s > 0; s--) {
-      status.textContent = `Simulated ad… ${s}`;
-      await sleep(1000);
-    }
-    if (run.online) {
-      status.textContent = 'Verifying reward with the server…';
-      await api.request('POST', `/v1/ads/dev-complete/${grantId}`, {});
-      let granted = false;
-      for (let i = 0; i < 8 && !granted; i++) {
-        granted = (await api.request('GET', `/v1/ads/grant/${grantId}`)).status === 'GRANTED';
-        if (!granted) await sleep(500);
-      }
-      if (!granted) throw new Error('not granted');
+      status.textContent = 'Confirming your extra life…';
+      const intent = await run.adIntent;
+      if (intent?.error) throw intent.error;
+      await claimGrant(intent.grantId);
     }
     run.extraLives++;
     const resumeAtUs = Math.round((performance.now() + 900 - run.ring0Perf) * 1000);
@@ -695,11 +893,7 @@ async function watchAdToContinue() {
     scheduleRing(run.pendingResolveUs, resumeAtUs);
     renderHud();
   } catch (e) {
-    status.textContent = `The ad reward couldn't be verified (${e.code ?? e.message}). Ending the run.`;
-    await sleep(1200);
-    endRun();
-  } finally {
-    $('continue-ad').disabled = false;
+    status.textContent = `No extra life this time (${e.code ?? e.message}).`;
   }
 }
 
@@ -710,12 +904,16 @@ async function endRun() {
   if (run.cur && !run.cur.resolved) run.cur.resolved = true; // a ring still on screen when the player quits is not counted
   setScreen('results-screen');
 
-  const before = { ...game.profile };
-  const best = run.deltasUs.length ? Math.min(...run.deltasUs.map(Math.abs)) : null;
+  const before = { ...game.profile, prestige: run.prestige - run.unlocked.length };
+  // Best tap is a skill record: Slow-Mo rings don't count toward it.
+  const skillDeltas = run.rings.filter((r) => !r.slow && r.deltaUs !== null).map((r) => Math.abs(r.deltaUs));
+  const best = skillDeltas.length ? Math.min(...skillDeltas) : null;
   const local = {
     verdicts: run.verdicts,
     ticks: run.mode === 'ZEN' ? 0 : run.ticks,
-    rating: run.mode === 'PULSE' ? nextRating(before.rating, run.verdicts, run.deltasUs) : before.rating,
+    rating: run.mode === 'RANKED' ? nextRating(before.rating, run.rings) : before.rating,
+    prestige: run.prestige,
+    unlocked: run.unlocked,
   };
   renderResults(run, local, best, before, null);
 
@@ -725,6 +923,7 @@ async function endRun() {
     p.ticks += local.ticks;
     p.rating = local.rating;
     p.slowMoTickets = Math.max(0, p.slowMoTickets - run.slowMoRings.length);
+    p.prestige = Math.max(p.prestige, local.prestige);
     if (best !== null && (p.bestUs === null || best < p.bestUs)) p.bestUs = best;
     saveProfile();
     renderResults(run, local, best, before, { kind: 'offline' });
@@ -740,6 +939,10 @@ async function endRun() {
       slowMoRings: run.slowMoRings,
       resumes: run.resumes,
     });
+    // The server's Prestige is authoritative; drop optimistic unlocks it didn't confirm.
+    game.profile.prestige = res.prestige;
+    store.set('prestige', res.prestige);
+    if (game.equipped > res.prestige) equip(res.prestige);
     if (res.status === 'VALIDATED') {
       game.profile.rating = res.precisionRating;
       if (res.newBestDeltaUs >= 0) game.profile.bestUs = res.newBestDeltaUs;
@@ -750,8 +953,13 @@ async function endRun() {
       saveProfile();
     }
     const mismatch = res.verdicts.some((v, i) => v !== run.verdicts[i]);
-    renderResults(run, { verdicts: res.verdicts, ticks: res.ticksAwarded, rating: res.precisionRating }, best, before, { kind: 'server', res, mismatch });
-    if (run.mode === 'GAUNTLET' && res.status === 'VALIDATED') loadLeaderboard();
+    renderResults(
+      run,
+      { verdicts: res.verdicts, ticks: res.ticksAwarded, rating: res.precisionRating, prestige: res.prestige, unlocked: res.prestigeUnlocked },
+      best,
+      before,
+      { kind: 'server', res, mismatch },
+    );
   } catch (e) {
     renderResults(run, local, best, before, { kind: 'error', code: e.code ?? 'network_error' });
   }
@@ -763,6 +971,7 @@ function saveProfile() {
   store.set('bestUs', p.bestUs);
   store.set('ticks', p.ticks);
   store.set('slowMoTickets', p.slowMoTickets);
+  store.set('prestige', p.prestige);
   renderProfile();
 }
 
@@ -784,11 +993,18 @@ function renderResults(run, result, best, before, verification) {
   const ratingEl = $('r-rating');
   ratingEl.textContent = '';
   ratingEl.append(`PRECISION ${result.rating} `);
-  if (run.mode === 'PULSE' && diff !== 0) {
+  if (run.mode === 'RANKED' && diff !== 0) {
     const span = document.createElement('span');
     span.className = diff > 0 ? 'up' : 'down';
     span.textContent = `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff)}`;
     ratingEl.append(span);
+  }
+
+  const prestigeEl = $('r-prestige');
+  prestigeEl.hidden = run.mode !== 'RANKED';
+  if (run.mode === 'RANKED') {
+    const n = result.unlocked.length;
+    prestigeEl.textContent = `PRESTIGE ${result.prestige}${n ? ` · ${n} new background${n > 1 ? 's' : ''}` : ''}`;
   }
 
   const v = $('r-verify');
@@ -813,33 +1029,87 @@ function renderResults(run, result, best, before, verification) {
   const shareBest = best === null ? 'no taps' : `best tap ${fmtDelta(best, false)}`;
   $('share').dataset.text = `One More Tap · ${run.mode} · ${shareBest} · ${result.verdicts.length} rings · seed ${run.seed}. Beat that.`;
   $('share-text').textContent = '';
-  $('leaderboard').hidden = true;
 }
 
-async function loadLeaderboard() {
-  try {
-    const lb = await api.request('GET', '/v1/leaderboard/gauntlet');
-    const list = $('leaderboard');
-    list.textContent = '';
-    for (const row of lb.top) {
-      const li = document.createElement('li');
-      if (row.isYou) li.className = 'me';
-      const misses = row.misses ? ` · ${row.misses}✕` : '';
-      li.append(Object.assign(document.createElement('span'), { textContent: `#${row.rank}` }));
-      li.append(Object.assign(document.createElement('span'), { textContent: row.isYou ? 'You' : row.player }));
-      li.append(Object.assign(document.createElement('span'), { textContent: `${fmtDelta(row.totalDeltaUs, false)}${misses}` }));
-      list.append(li);
-    }
-    if (lb.you && !lb.top.some((r) => r.isYou)) {
-      const li = document.createElement('li');
-      li.className = 'me';
-      li.textContent = `#${lb.you.rank}  You  ${fmtDelta(lb.you.totalDeltaUs, false)}`;
-      list.append(li);
-    }
-    list.hidden = lb.top.length === 0;
-  } catch {
-    /* leaderboard is optional */
+// ============================================================ Unlocks menu
+
+let gridBuilt = false;
+let thumbObserver = null;
+
+function buildUnlocks() {
+  const grid = $('unlock-grid');
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        paintTile(e.target);
+      }
+    },
+    { root: $('unlocks-screen'), rootMargin: '200px' },
+  );
+  for (let level = 0; level <= PRESTIGE_MAX; level++) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'unlock-tile' + (level === 100 ? ' zero' : '');
+    btn.dataset.level = String(level);
+    const c = document.createElement('canvas');
+    c.width = 192;
+    c.height = 192;
+    const lock = document.createElement('span');
+    lock.className = 'lock';
+    lock.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    const meta = document.createElement('span');
+    meta.className = 'tile-meta';
+    meta.innerHTML = '<span class="tile-level"></span><span class="tile-name"></span>';
+    btn.append(c, lock, meta);
+    btn.addEventListener('click', () => {
+      if (level <= game.profile.prestige) equip(level);
+    });
+    li.append(btn);
+    grid.append(li);
+    thumbObserver.observe(btn);
   }
+  gridBuilt = true;
+}
+
+function paintTile(btn) {
+  const level = Number(btn.dataset.level);
+  const locked = level > game.profile.prestige;
+  if (btn.dataset.painted === String(locked)) return;
+  drawThumbnail(btn.querySelector('canvas'), level, locked);
+  btn.dataset.painted = String(locked);
+}
+
+function refreshUnlocks() {
+  if (!gridBuilt) return;
+  const p = game.profile.prestige;
+  $('unlocks-level').textContent = String(p);
+  $('equipped-label').textContent = `EQUIPPED · ${themeInfo(game.equipped).name.toUpperCase()}`;
+  $('unlocks-hint').textContent =
+    p >= PRESTIGE_MAX
+      ? 'All 100 unlocked. You reached ZERO.'
+      : `Fill the golden circle in Ranked: ${prestigeCircleSize(p + 1)} hits in a row unlocks Prestige ${p + 1}. A miss empties it.`;
+  for (const btn of $('unlock-grid').querySelectorAll('.unlock-tile')) {
+    const level = Number(btn.dataset.level);
+    const locked = level > p;
+    const info = themeInfo(level);
+    btn.classList.toggle('locked', locked);
+    btn.classList.toggle('equipped', level === game.equipped);
+    btn.setAttribute('aria-disabled', String(locked));
+    btn.setAttribute('aria-pressed', String(level === game.equipped));
+    btn.querySelector('.tile-level').textContent = level === 0 ? 'DEFAULT' : `LVL ${level}`;
+    btn.querySelector('.tile-name').textContent = locked && level === 100 ? '???' : info.name;
+    btn.querySelector('.lock').hidden = !locked;
+    btn.setAttribute('aria-label', locked ? `Level ${level}, locked` : `${info.name}, ${info.blurb}${level === game.equipped ? ', equipped' : ''}`);
+    if (btn.dataset.painted !== undefined && btn.dataset.painted !== String(locked)) paintTile(btn);
+  }
+}
+
+function openUnlocks() {
+  if (!gridBuilt) buildUnlocks();
+  refreshUnlocks();
+  setScreen('unlocks-screen');
 }
 
 // ============================================================ Wiring
@@ -867,7 +1137,7 @@ $('slowmo').addEventListener('click', () => {
     run.armed = false;
     run.slowMoRings.push(ring.index);
     ring.closeUs = ring.spawnUs + baseUs * SLOWMO_FACTOR;
-    ring.deadlineUs = ring.closeUs + ring.windowMs * 1000;
+    ring.deadlineUs = ring.closeUs + windowRealUs(ring.windowMs, true);
     ring.closePerf = run.ring0Perf + ring.closeUs / 1000;
   }
   renderHud();
@@ -891,8 +1161,10 @@ $('menu').addEventListener('click', () => {
   renderProfile();
   setScreen('title-screen');
 });
-$('continue-ad').addEventListener('click', () => watchAdToContinue());
-$('continue-end').addEventListener('click', () => endRun());
+$('ad-continue').addEventListener('click', () => continueAfterAd());
+$('ad-end').addEventListener('click', () => endRun());
+$('open-unlocks').addEventListener('click', () => openUnlocks());
+$('unlocks-close').addEventListener('click', () => setScreen('title-screen'));
 $('share').addEventListener('click', async (e) => {
   const text = e.currentTarget.dataset.text ?? '';
   const out = $('share-text');
@@ -904,16 +1176,22 @@ $('share').addEventListener('click', async (e) => {
   }
 });
 
-const sound = $('opt-sound');
+const volume = $('opt-volume');
 const haptics = $('opt-haptics');
-sound.checked = fx.sound;
+volume.value = String(Math.round(fx.volume * 100));
+$('volume-value').textContent = volume.value;
+volume.addEventListener('input', () => {
+  fx.unlock();
+  fx.setVolume(Number(volume.value) / 100);
+  $('volume-value').textContent = volume.value;
+});
+volume.addEventListener('change', () => fx.tone(880, 0.25, { gain: 0.2 })); // preview at the new level
 haptics.checked = fx.haptics;
-sound.addEventListener('change', () => store.set('sound', (fx.sound = sound.checked)));
 haptics.addEventListener('change', () => store.set('haptics', (fx.haptics = haptics.checked)));
 
 document.addEventListener('visibilitychange', () => {
   // Backgrounding mid-run would turn every remaining ring into a miss; end the run cleanly instead.
-  if (document.hidden && game.run && !game.run.ended && $('continue-screen').hidden) endRun();
+  if (document.hidden && game.run && !game.run.ended && $('ad-screen').hidden) endRun();
 });
 
 async function connect() {
@@ -932,7 +1210,11 @@ async function connect() {
       bestUs: profile.bestDeltaUs >= 0 ? profile.bestDeltaUs : null,
       ticks: Number(profile.wallet.ticks),
       slowMoTickets: profile.wallet.slowMoTickets,
+      prestige: profile.prestige,
     };
+    game.webAdRewards = profile.webAdRewards ?? 'none';
+    store.set('prestige', profile.prestige);
+    if (game.equipped > profile.prestige) equip(profile.prestige);
     game.online = true;
     renderProfile();
     status.className = 'connection online';
@@ -947,6 +1229,9 @@ if (location.hash === '#debug') window.omtDebug = game;
 
 resize();
 renderProfile();
+if (game.equipped > game.profile.prestige) game.equipped = 0;
+bgLevel = game.equipped;
+loadAdNetwork();
 setScreen('title-screen');
 requestAnimationFrame(render);
 connect();

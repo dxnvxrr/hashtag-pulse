@@ -71,6 +71,7 @@ export function closeWindowMs(ftue, index) {
   return ftue && index === 0 ? Verdicts.ftueCloseMs : Verdicts.closeMs;
 }
 
+/** Scores a game-time |delta| (see toGameTimeUs) against the verdict windows. */
 export function classify(absDeltaUs, windowMs) {
   if (absDeltaUs <= Verdicts.perfectMs * 1000) return 'PERFECT';
   if (absDeltaUs <= Verdicts.cleanMs * 1000) return 'CLEAN';
@@ -78,23 +79,69 @@ export function classify(absDeltaUs, windowMs) {
   return 'MISS';
 }
 
+/**
+ * Slow-Mo runs a ring at 0.4x, so a real-time delta is converted to game time before scoring (x2/5, truncated
+ * toward zero to match C# long division). Every verdict window is therefore 2.5x wider in real time.
+ */
+export function toGameTimeUs(realDeltaUs, slow) {
+  return slow ? Math.trunc((realDeltaUs * 2) / 5) : realDeltaUs;
+}
+
+/** Real-time length of a ring's close window. */
+export function windowRealUs(windowMs, slow) {
+  return slow ? windowMs * 2500 : windowMs * 1000;
+}
+
 /** Ticks per verdict (mirrors GameRules.ticksPer* on the server). */
 export function ticksFor(verdict) {
   return verdict === 'PERFECT' ? 5 : verdict === 'CLEAN' ? 2 : verdict === 'CLOSE' ? 1 : 0;
 }
 
-/** ELO-like rating update (mirrors submitRun on the server). */
-export function nextRating(rating, verdicts, deltasUs) {
-  if (verdicts.length < 5) return rating;
+/** Lives per mode. Ranked: 5. Zen: unlimited. */
+export const LIVES = { RANKED: 5, ZEN: Infinity };
+
+/**
+ * ELO-like rating update (mirrors submitRun on the server). `rings`: [{ verdict, deltaUs (game time, null if untapped), slow }].
+ * Slow-Mo rings are left out: a purchasable ticket must never improve the skill number.
+ */
+export function nextRating(rating, rings) {
+  const scored = rings.filter((r) => !r.slow);
+  if (scored.length < 5) return rating;
   let sum = 0;
-  for (const d of deltasUs) sum += Math.max(0, 1 - Math.abs(d) / 1000 / Verdicts.closeMs);
-  const performance = sum / verdicts.length;
+  for (const r of scored) if (r.deltaUs !== null) sum += Math.max(0, 1 - Math.abs(r.deltaUs) / 1000 / Verdicts.closeMs);
+  const performance = sum / scored.length;
   return Math.max(0, Math.min(3000, Math.round(rating + 64 * (performance - rating / 3000))));
 }
 
-/** UTC-day seed for the offline Gauntlet (the online one is HMAC'd server-side and unpredictable). */
-export function offlineGauntletSeed(day) {
-  let h = 2166136261;
-  for (const ch of `gauntlet:${day}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-  return h >>> 0;
+// ---------------------------------------------------------------- Prestige (Ranked only)
+
+export const PRESTIGE_MAX = 100;
+
+/** Consecutive hits needed to fill the golden circle that unlocks `level` (1..100). Deeper levels need longer streaks. */
+export function prestigeCircleSize(level) {
+  return level <= 25 ? 10 : level <= 50 ? 15 : level <= 75 ? 20 : 25;
+}
+
+/**
+ * Applies a run's verdicts to the player's Prestige. Any non-MISS verdict fills the circle by one; a MISS empties it.
+ * A full circle unlocks the next level and starts a fresh circle. Mirrors applyPrestige on the server.
+ */
+export function applyPrestige(startLevel, verdicts) {
+  let level = startLevel;
+  let inCircle = 0;
+  const unlocked = [];
+  for (const v of verdicts) {
+    if (v === 'MISS') {
+      inCircle = 0;
+      continue;
+    }
+    if (level >= PRESTIGE_MAX) continue;
+    inCircle++;
+    if (inCircle === prestigeCircleSize(level + 1)) {
+      level++;
+      unlocked.push(level);
+      inCircle = 0;
+    }
+  }
+  return { level, unlocked, inCircle };
 }
