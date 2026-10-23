@@ -443,6 +443,8 @@ const game = {
   /** A friend's challenge from the page link (#c-…), or null. */
   challenge: decodeChallenge(location.hash),
   seenLooks: store.get('seenLooks', []),
+  /** Lifetime Ranked verdicts: the server's totals when online; offline practice is counted on this device only. */
+  lifetime: { server: store.get('lifetime', null), device: store.get('lifetimeDevice', null) },
   /** How the server lets this client claim an ad reward: 'attest' | 'dev' | 'none' (offline: local). */
   webAdRewards: 'local',
 };
@@ -465,6 +467,35 @@ function renderProfile() {
   $('profile-best').textContent = p.bestUs === null ? '—' : fmtDelta(p.bestUs, false);
   $('profile-rating').textContent = String(p.rating);
   $('profile-prestige').textContent = String(p.prestige);
+  const life = lifetime();
+  $('life-perfect').textContent = fmtCount(life.perfects);
+  $('life-clean').textContent = fmtCount(life.cleans);
+  $('life-close').textContent = fmtCount(life.closes);
+  $('lifetime-source').textContent = game.online ? '' : ' · THIS DEVICE';
+}
+
+const fmtCount = (n) => n.toLocaleString('en-US');
+const ZERO_LIFETIME = { perfects: 0, cleans: 0, closes: 0, rankedRuns: 0 };
+
+function lifetime() {
+  return (game.online ? game.lifetime.server : game.lifetime.device) ?? ZERO_LIFETIME;
+}
+
+/** Ranked verdicts that count toward lifetime stats. Slow-Mo rings don't (same rule as the server). */
+function statCounts(run) {
+  const c = { perfects: 0, cleans: 0, closes: 0 };
+  for (const r of run.rings) {
+    if (r.slow) continue;
+    if (r.verdict === 'PERFECT') c.perfects++;
+    else if (r.verdict === 'CLEAN') c.cleans++;
+    else if (r.verdict === 'CLOSE') c.closes++;
+  }
+  return c;
+}
+
+function setServerLifetime(stats) {
+  game.lifetime.server = stats;
+  store.set('lifetime', stats);
 }
 
 /** Equips a background the player has unlocked (0 = default). */
@@ -914,6 +945,12 @@ async function endRun() {
 
   if (run.verdicts.length === 0) return;
   if (!run.online) {
+    if (run.mode === 'RANKED') {
+      const c = statCounts(run);
+      const d = game.lifetime.device ?? ZERO_LIFETIME;
+      game.lifetime.device = { perfects: d.perfects + c.perfects, cleans: d.cleans + c.cleans, closes: d.closes + c.closes, rankedRuns: d.rankedRuns + 1 };
+      store.set('lifetimeDevice', game.lifetime.device);
+    }
     const p = game.profile;
     p.ticks += local.ticks;
     p.rating = local.rating;
@@ -945,6 +982,7 @@ async function endRun() {
         game.profile.ticks = Number(res.wallet.ticks);
         game.profile.slowMoTickets = res.wallet.slowMoTickets;
       }
+      if (res.lifetime) setServerLifetime(res.lifetime);
       saveProfile();
     }
     const mismatch = res.verdicts.some((v, i) => v !== run.verdicts[i]);
@@ -1049,6 +1087,15 @@ function renderResults(run, result, best, before, verification) {
   } else {
     v.className = 'verify bad';
     v.textContent = `Run ${verification.res.status.toLowerCase()} by anti-cheat (${verification.res.reason}). No rewards.`;
+  }
+
+  // Lifetime totals: shown once they include this run (offline at once; online after the server verifies it).
+  const lifeEl = $('r-lifetime');
+  const counted = run.mode === 'RANKED' && (verification?.kind === 'offline' || (verification?.kind === 'server' && verification.res.lifetime));
+  lifeEl.hidden = !counted;
+  if (counted) {
+    const l = lifetime();
+    lifeEl.textContent = `LIFETIME\n${fmtCount(l.perfects)} PERFECT · ${fmtCount(l.cleans)} CLEAN · ${fmtCount(l.closes)} CLOSE`;
   }
 
   const daily = run.daily;
@@ -1318,6 +1365,7 @@ async function connect() {
       prestige: profile.prestige,
     };
     game.webAdRewards = profile.webAdRewards ?? 'none';
+    if (profile.lifetime) setServerLifetime(profile.lifetime);
     store.set('prestige', profile.prestige);
     if (game.equipped > profile.prestige) equip(profile.prestige);
     game.online = true;

@@ -49,6 +49,11 @@ out, then back in near the target), 20 adds Stutter (moves in steps), and 30 add
 target early, then opens up again). From ring 5, about 1 in 4 rings uses an unlocked type. A toast explains each one
 the first time it appears.
 
+**Lifetime stats** (title screen and Ranked results): total PERFECT, CLEAN and CLOSE verdicts from Ranked runs.
+Online they come from the server and count only server-verified runs. Offline they count on the device only
+(labelled THIS DEVICE) and never merge into the server totals. Slow-Mo rings never count, because tickets can be
+bought.
+
 **Daily streak** (Ranked runs; stored on the device): play every day to grow it. Every 7th day in a row earns an
 Anchor (max 2). An Anchor covers one missed day. The title screen shows the last 7 days and whether today is done.
 
@@ -120,6 +125,27 @@ Optional SDKs compile only when their scripting define is set:
 - **Offline runs** are practice only. They're never rewarded, because the server must issue the run seed.
 - **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes. It has no Prestige, backgrounds, ring types, streaks or challenges. The web build is
   the lead client for now. The server keeps the older modes so the Unity build still works.
+
+## Airdrop snapshot rails (future; nothing is distributed today)
+
+`player_stats` holds the lifetime totals shown to players. Snapshots never read it: they recompute from the `runs`
+ledger, so a run quarantined later loses its credit.
+
+```bash
+cd Backend && npm run build
+npm run airdrop -- snapshot genesis 2027-01-01T00:00:00Z 10        # label, cutoff, min verified Ranked runs
+npm run airdrop -- show genesis                                     # totals and exclusion counts
+npm run airdrop -- finalize genesis                                 # freezes it and records the SHA-256 digest
+npm run airdrop -- export genesis > genesis.csv                     # user_id,points (digest = sha256 of the rows)
+```
+
+- **Points:** PERFECT 4, CLEAN 3, CLOSE 2 by default (the Prestige ratio). They're configurable per snapshot.
+- **Excluded, with the reason recorded:** minors (and any account that hasn't passed the age gate), pending
+  deletion, non-active accounts, any quarantined or rejected Ranked run before the cutoff (manual review), and fewer
+  than the minimum verified runs.
+- **Frozen:** database triggers refuse any change to a FINAL snapshot and any update to an entry. Account erasure
+  still cascades, so GDPR/CCPA deletion keeps working.
+- **No HTTP endpoint, no wallet addresses, no token logic.** Those need legal sign-off first (see the PR/notes).
 
 ## Background jobs (run inside the API, single-flight via a Redis lock)
 

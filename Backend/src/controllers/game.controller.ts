@@ -5,6 +5,7 @@ import { gauntletLeaderboard, serverTime, startRun, submitRun } from '../service
 import { prisma } from '../lib/prisma.js';
 import { Errors } from '../lib/errors.js';
 import { getWallet } from '../services/wallet.service.js';
+import { getLifetimeStats } from '../services/stats.service.js';
 import { authOf, requireSignedAuth } from '../plugins/authenticate.js';
 
 const StartBody = z.object({
@@ -51,6 +52,8 @@ export async function gameController(app: FastifyInstance): Promise<void> {
       // -1 instead of null: Unity's JsonUtility cannot read null into a number.
       bestDeltaUs: user.bestDeltaUs ?? -1,
       wallet: await getWallet(userId),
+      /** Lifetime Ranked verdicts from server-verified runs (Slow-Mo rings excluded). */
+      lifetime: await getLifetimeStats(userId),
       // How a web client may claim an ad reward: client attestation, the dev simulator, or not at all.
       webAdRewards: config.WEB_ADS_CLIENT_ATTESTED ? 'attest' : isProduction ? 'none' : 'dev',
     };

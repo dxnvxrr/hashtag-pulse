@@ -10,6 +10,7 @@ import { getSession } from './auth.service.js';
 import { baseDurationForRating, generateSchedule } from './ringSchedule.js';
 import { applyPrestige, nextRating, toGameTimeUs, windowRealUs, type RingOutcome } from './progression.js';
 import { applyLedgerEntries, toWalletView, type LedgerEntry, type WalletView } from './wallet.service.js';
+import { addRankedRun, statCounts, type LifetimeStats } from './stats.service.js';
 
 // ============================================================ Request signing
 
@@ -366,6 +367,8 @@ export interface RunSubmitResult {
   precisionRating: number;
   prestige: number;
   prestigeUnlocked: number[];
+  /** Lifetime Ranked totals after this run; null when the run didn't change them. */
+  lifetime: LifetimeStats | null;
   wallet: WalletView | null;
   reason?: string;
 }
@@ -433,6 +436,7 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       precisionRating: user.precisionRating,
       prestige: user.prestige,
       prestigeUnlocked: [],
+      lifetime: null,
       wallet: null,
       reason: ev.rejectReason ?? 'flagged_for_review',
     };
@@ -471,8 +475,10 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
     });
   }
 
+  const stats = mode === 'RANKED' ? statCounts(ev.rings) : { perfects: 0, cleans: 0, closes: 0 };
+
   try {
-    const wallet = await prisma.$transaction(async (tx) => {
+    const { wallet, lifetime } = await prisma.$transaction(async (tx) => {
       const w = entries.length > 0 ? (await applyLedgerEntries(tx, userId, entries)).wallet : await tx.wallet.findUniqueOrThrow({ where: { userId } });
       await tx.run.update({
         where: { id: input.runId },
@@ -487,10 +493,13 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
           totalDeltaUs: BigInt(ev.totalDeltaUs),
           bestDeltaUs: ev.bestDeltaUs,
           ticksAwarded: ticks,
+          statPerfects: stats.perfects,
+          statCleans: stats.cleans,
+          statCloses: stats.closes,
         },
       });
       await tx.user.update({ where: { id: userId }, data: { precisionRating: rating, bestDeltaUs: newBest, prestige: prestige.level } });
-      return w;
+      return { wallet: w, lifetime: mode === 'RANKED' ? await addRankedRun(tx, userId, stats) : null };
     });
 
     if (mode === 'GAUNTLET') {
@@ -511,6 +520,7 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       precisionRating: rating,
       prestige: prestige.level,
       prestigeUnlocked: prestige.unlocked,
+      lifetime,
       wallet: toWalletView(wallet),
     };
   } catch (err) {

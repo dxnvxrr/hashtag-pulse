@@ -106,6 +106,8 @@ model User {
   runs          Run[]
   adRewards     AdReward[]
   auditLogs     AuditLog[]
+  stats         PlayerStats?
+  airdropEntries AirdropEntry[]
 
   @@map("users")
 }
@@ -238,12 +240,17 @@ model Run {
   totalDeltaUs BigInt    @default(0)
   bestDeltaUs  Int?
   ticksAwarded Int       @default(0)
+  /// The verdicts that count toward lifetime stats: Ranked only, Slow-Mo rings excluded (tickets can be bought).
+  statPerfects Int       @default(0)
+  statCleans   Int       @default(0)
+  statCloses   Int       @default(0)
   flags        String[]
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, startedAt])
   @@index([status])
+  @@index([mode, status, submittedAt])
   @@map("runs")
 }
 
@@ -298,4 +305,69 @@ model TelemetryEvent {
   @@unique([category, streamId])
   @@index([category, name, receivedAt])
   @@map("telemetry_events")
+}
+
+/// Lifetime Ranked totals shown to the player, updated with each verified Ranked run. Display only: airdrop
+/// snapshots recompute from the runs table, so a run quarantined later can't keep its credit.
+model PlayerStats {
+  userId     String   @id @db.Uuid
+  perfects   Int      @default(0)
+  cleans     Int      @default(0)
+  closes     Int      @default(0)
+  rankedRuns Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("player_stats")
+}
+
+enum SnapshotStatus {
+  DRAFT
+  FINAL
+  CANCELLED
+}
+
+/// A frozen record of every player's skill score at a cutoff, for a future token distribution. Built only by the
+/// operator CLI (src/cli/airdrop.ts); there is no HTTP surface. Once FINAL it can't change (database trigger).
+model AirdropSnapshot {
+  id            String         @id @default(uuid()) @db.Uuid
+  label         String         @unique
+  /// Only runs submitted before this instant count.
+  cutoffAt      DateTime
+  status        SnapshotStatus @default(DRAFT)
+  weightPerfect Int
+  weightClean   Int
+  weightClose   Int
+  minRankedRuns Int
+  eligibleUsers Int            @default(0)
+  totalPoints   BigInt         @default(0)
+  /// SHA-256 over the eligible entries (user id and points, sorted by user id), recorded when finalised.
+  digest        String?
+  createdAt     DateTime       @default(now())
+  finalizedAt   DateTime?
+
+  entries AirdropEntry[]
+
+  @@map("airdrop_snapshots")
+}
+
+model AirdropEntry {
+  snapshotId     String  @db.Uuid
+  userId         String  @db.Uuid
+  perfects       Int
+  cleans         Int
+  closes         Int
+  rankedRuns     Int
+  points         BigInt
+  eligible       Boolean
+  /// Why an ineligible player was left out: minor, account_status, deletion_pending, anticheat_review, too_few_runs.
+  excludedReason String?
+
+  snapshot AirdropSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([snapshotId, userId])
+  @@index([snapshotId, eligible])
+  @@map("airdrop_entries")
 }

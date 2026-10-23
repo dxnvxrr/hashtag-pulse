@@ -56,6 +56,14 @@
         <div><dt>PRECISION</dt><dd id="profile-rating" class="mono">1000</dd></div>
         <div><dt>PRESTIGE</dt><dd id="profile-prestige" class="mono">0</dd></div>
       </dl>
+      <section class="lifetime" aria-labelledby="lifetime-title">
+        <p id="lifetime-title" class="eyebrow">LIFETIME · RANKED<span id="lifetime-source"></span></p>
+        <dl class="lifetime-stats">
+          <div data-v="PERFECT"><dt>PERFECT</dt><dd id="life-perfect" class="mono">0</dd></div>
+          <div data-v="CLEAN"><dt>CLEAN</dt><dd id="life-clean" class="mono">0</dd></div>
+          <div data-v="CLOSE"><dt>CLOSE</dt><dd id="life-close" class="mono">0</dd></div>
+        </dl>
+      </section>
       <section id="challenge-card" class="challenge-card" hidden aria-labelledby="challenge-title">
         <p id="challenge-title" class="eyebrow">CHALLENGE</p>
         <p id="challenge-text" class="challenge-text"></p>
@@ -134,6 +142,7 @@
       <p id="r-rating" class="rating mono"></p>
       <p id="r-prestige" class="rating mono" hidden></p>
       <p id="r-daily" class="rating mono" hidden></p>
+      <p id="r-lifetime" class="rating mono lifetime-line" hidden></p>
       <p id="r-challenge" class="challenge-result" hidden></p>
       <p id="r-verify" class="verify"></p>
       <div class="actions">
