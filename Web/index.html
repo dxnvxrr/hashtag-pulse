@@ -9,9 +9,14 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;500;800&family=Manrope:wght@400;600;800&display=swap">
 <link rel="stylesheet" href="style.css">
 <!--ARTIFACT-HEAD-END-->
+<link rel="modulepreload" href="core.js">
+<link rel="modulepreload" href="store.js">
+<link rel="modulepreload" href="api.js">
+<link rel="modulepreload" href="progress.js">
+<link rel="modulepreload" href="backgrounds.js">
+<link rel="modulepreload" href="music.js">
 </head>
 <body>
 <!--ARTIFACT-BODY-START-->
@@ -33,8 +38,8 @@
   </div>
   <p id="hint" class="hint" hidden>TAP WHEN THE RING CLOSES</p>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden>
-    <span class="toast-eyebrow">PRESTIGE <span id="toast-level">1</span> UNLOCKED</span>
-    <span id="toast-name" class="toast-name">Drift 1</span>
+    <span id="toast-eyebrow" class="toast-eyebrow"></span>
+    <span id="toast-name" class="toast-name"></span>
   </div>
 
   <button id="slowmo" class="slowmo" type="button" hidden aria-label="Arm Slow-Mo for the next ring">
@@ -51,6 +56,18 @@
         <div><dt>PRECISION</dt><dd id="profile-rating" class="mono">1000</dd></div>
         <div><dt>PRESTIGE</dt><dd id="profile-prestige" class="mono">0</dd></div>
       </dl>
+      <section id="challenge-card" class="challenge-card" hidden aria-labelledby="challenge-title">
+        <p id="challenge-title" class="eyebrow">CHALLENGE</p>
+        <p id="challenge-text" class="challenge-text"></p>
+        <div class="challenge-actions">
+          <button id="challenge-accept" class="primary" type="button">PLAY THEIR RINGS</button>
+          <button id="challenge-dismiss" class="hud-btn" type="button">NOT NOW</button>
+        </div>
+      </section>
+      <div id="daily" class="daily">
+        <div id="daily-days" class="daily-days" aria-hidden="true"></div>
+        <p id="daily-text" class="small"></p>
+      </div>
       <div class="modes" role="radiogroup" aria-label="Game mode">
         <button type="button" class="mode" role="radio" aria-checked="true" data-mode="RANKED">RANKED<small>5 lives · earns Prestige</small></button>
         <button type="button" class="mode" role="radio" aria-checked="false" data-mode="ZEN">ZEN<small>no lives, no stakes</small></button>
@@ -116,10 +133,12 @@
       </dl>
       <p id="r-rating" class="rating mono"></p>
       <p id="r-prestige" class="rating mono" hidden></p>
+      <p id="r-daily" class="rating mono" hidden></p>
+      <p id="r-challenge" class="challenge-result" hidden></p>
       <p id="r-verify" class="verify"></p>
       <div class="actions">
         <button id="again" class="primary" type="button">ONE MORE</button>
-        <button id="share" class="secondary" type="button">COPY SCORE</button>
+        <button id="share" class="secondary" type="button">CHALLENGE A FRIEND</button>
         <button id="menu" class="secondary" type="button">MENU</button>
       </div>
       <p id="share-text" class="small share-text" aria-live="polite"></p>

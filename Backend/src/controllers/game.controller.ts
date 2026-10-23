@@ -10,6 +10,8 @@ import { authOf, requireSignedAuth } from '../plugins/authenticate.js';
 const StartBody = z.object({
   mode: z.enum(['RANKED', 'ZEN', 'PULSE', 'GAUNTLET', 'DUEL']),
   duelSeed: z.number().int().min(0).max(0xffffffff).optional(),
+  /** Ring speed of the challenged run; same bounds as any ring schedule. */
+  duelBaseMs: z.number().int().min(800).max(2500).optional(),
 });
 
 const SubmitBody = z.object({
@@ -28,7 +30,7 @@ export async function gameController(app: FastifyInstance): Promise<void> {
 
   app.post('/v1/runs/start', { preHandler: requireSignedAuth }, async (req) => {
     const body = StartBody.parse(req.body);
-    return startRun(authOf(req).sub, body.mode, body.duelSeed);
+    return startRun(authOf(req).sub, body.mode, body.duelSeed, body.duelBaseMs);
   });
 
   app.post('/v1/runs/submit', { preHandler: requireSignedAuth }, async (req) => {

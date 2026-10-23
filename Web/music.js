@@ -1,6 +1,7 @@
 // Procedural chiptune: one looping theme per Prestige family (levels 1-10, 11-20, ... 91-99) plus ZERO at 100.
 // Each theme is composed deterministically from its index: key, mode, tempo, chord progression and instrument layers.
-// Higher families add layers (hats, arpeggios, kick), so the music grows with the backgrounds. Nothing to download.
+// Higher families start with more layers (hats, arpeggios, kick), so the music grows with the backgrounds, and during
+// a run the current streak brings the missing layers in (see setIntensity). Nothing to download.
 
 import { Mulberry32 } from './core.js';
 
@@ -11,7 +12,7 @@ const MIXOLYDIAN = [0, 2, 4, 5, 7, 9, 10];
 const LYDIAN = [0, 2, 4, 6, 7, 9, 11];
 const HARMONIC_MINOR = [0, 2, 3, 5, 7, 8, 11];
 
-// prog: scale degree of each bar's chord (4 bars). layers grow with the family.
+// prog: scale degree of each bar's chord (4 bars). hat/arp/kick: layers the theme plays even at intensity 0.
 const THEMES = [
   { name: 'Drift', root: 60, scale: MAJOR, bpm: 96, prog: [0, 4, 5, 3], lead: 'triangle', bass: 'triangle', hat: false, arp: false, kick: false },
   { name: 'Prism', root: 62, scale: DORIAN, bpm: 104, prog: [0, 3, 6, 4], lead: 'square', bass: 'triangle', hat: false, arp: false, kick: false },
@@ -72,16 +73,21 @@ export function composeTheme(index) {
         lead,
         leadLen: strong && rand() < 0.35 ? 2 : 1,
         bass: s === 0 || s === 4 || (index >= 6 && (s === 2 || s === 6)) ? midiAt(t, chord, s === 2 || s === 6 ? 0 : -1) : null,
-        arp: t.arp ? midiAt(t, tones[s % 3], 2) : null,
-        hat: t.hat && s % 2 === 1,
-        kick: t.kick && (s === 0 || s === 4),
+        arp: midiAt(t, tones[s % 3], 2),
+        hat: s % 2 === 1,
+        kick: s === 0 || s === 4,
       });
     }
   }
-  return { name: t.name, bpm: t.bpm, lead: t.lead, bass: t.bass, steps };
+  return { name: t.name, bpm: t.bpm, lead: t.lead, bass: t.bass, base: { hat: t.hat, arp: t.arp, kick: t.kick }, steps };
 }
 
 const hz = (midi) => 440 * 2 ** ((midi - 69) / 12);
+
+/** Streak intensity: 0 (base), 1 at 5 in a row (hats), 2 at 10 (arpeggio), 3 at 20 (kick + doubled lead). */
+export function intensityForStreak(streak) {
+  return streak >= 20 ? 3 : streak >= 10 ? 2 : streak >= 5 ? 1 : 0;
+}
 
 export class Music {
   constructor(ctx, destination) {
@@ -92,6 +98,7 @@ export class Music {
     this.step = 0;
     this.nextTime = 0;
     this.timer = 0;
+    this.intensity = 0;
     this.noise = this.makeNoise();
   }
 
@@ -110,6 +117,11 @@ export class Music {
       this.theme = this.pending;
       this.pending = null;
     }
+  }
+
+  /** Layers come in on the next step and drop out immediately (a miss should be heard straight away). */
+  setIntensity(level) {
+    this.intensity = level;
   }
 
   start() {
@@ -135,11 +147,16 @@ export class Music {
       }
       const s = this.theme.steps[this.step % this.theme.steps.length];
       const t = this.nextTime;
-      if (s.lead !== null) this.voice(this.theme.lead, hz(s.lead), t, stepDur * s.leadLen * 0.9, 0.17);
+      const base = this.theme.base;
+      const level = this.intensity;
+      if (s.lead !== null) {
+        this.voice(this.theme.lead, hz(s.lead), t, stepDur * s.leadLen * 0.9, 0.17);
+        if (level >= 3) this.voice('triangle', hz(s.lead + 12), t, stepDur * s.leadLen * 0.8, 0.05);
+      }
       if (s.bass !== null) this.voice(this.theme.bass, hz(s.bass), t, stepDur * 1.6, 0.2);
-      if (s.arp !== null) this.voice('triangle', hz(s.arp), t, stepDur * 0.5, 0.06);
-      if (s.hat) this.hat(t);
-      if (s.kick) this.kick(t);
+      if (base.arp || level >= 2) this.voice('triangle', hz(s.arp), t, stepDur * 0.5, 0.06);
+      if (s.hat && (base.hat || level >= 1)) this.hat(t);
+      if (s.kick && (base.kick || level >= 3)) this.kick(t);
       this.nextTime += stepDur;
       this.step++;
     }

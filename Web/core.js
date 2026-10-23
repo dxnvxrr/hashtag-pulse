@@ -98,7 +98,7 @@ export function ticksFor(verdict) {
 }
 
 /** Lives per mode. Ranked: 5. Zen: unlimited. */
-export const LIVES = { RANKED: 5, ZEN: Infinity };
+export const LIVES = { RANKED: 5, CHALLENGE: 5, ZEN: Infinity };
 
 /**
  * ELO-like rating update (mirrors submitRun on the server). `rings`: [{ verdict, deltaUs (game time, null if untapped), slow }].
@@ -164,4 +164,52 @@ export function applyPrestige(startLevel, verdicts) {
     }
   }
   return { level, unlocked, inCircle: level >= PRESTIGE_MAX ? 0 : half / 2 };
+}
+
+// ---------------------------------------------------------------- Ring looks (visual only)
+// Ring types change how a ring *looks* while it closes, never when it closes, so server scoring is untouched.
+// Each Prestige block of ten introduces one: Ghost (10+), Stutter (20+), Eclipse (30+).
+
+export const RING_LOOKS = ['ghost', 'stutter', 'eclipse'];
+
+/** How many special looks the player's block allows (0..3). */
+export function looksUnlocked(prestige) {
+  return Math.min(RING_LOOKS.length, Math.floor(prestige / 10));
+}
+
+/**
+ * Look for ring `index` of a run: deterministic in (seed, index, unlocked), so a challenge link shows a friend the
+ * exact same rings. Drifters (archetype 1) keep their slide; about 1 in 4 other rings past ring 5 get a special look.
+ */
+export function ringLook(seed, index, archetype, unlocked) {
+  if (archetype === 1) return 'drifter';
+  if (unlocked <= 0 || index < 5) return 'standard';
+  const r = new Mulberry32((seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0).nextUint();
+  if (r % 100 >= 25) return 'standard';
+  return RING_LOOKS[(r >>> 8) % unlocked];
+}
+
+/** Stutter closes in uneven jumps but still lands on the target exactly at the close moment. */
+const STUTTER_STEPS = [0, 0.22, 0.38, 0.61, 0.74, 0.9, 1];
+
+/**
+ * Visual close progress q (0 = start size, 1 = on the target) at real progress p (1 = the scored close moment).
+ * Eclipse touches the target early (a decoy at p = 0.45), opens back up, then truly closes at p = 1.
+ */
+export function lookProgress(look, p) {
+  if (p >= 1 || look === 'standard' || look === 'drifter' || look === 'ghost') return p;
+  if (look === 'stutter') {
+    let q = 0;
+    for (const s of STUTTER_STEPS) if (p >= s) q = s;
+    return q;
+  }
+  if (p < 0.45) return p / 0.45;
+  if (p < 0.7) return 1 - 0.45 * ((p - 0.45) / 0.25);
+  return 0.55 + 0.45 * ((p - 0.7) / 0.3);
+}
+
+/** Ghost fades in and out while closing and is always fully visible for the last 15%. */
+export function lookAlpha(look, p) {
+  if (look !== 'ghost' || p > 0.85) return 1;
+  return 0.12 + 0.88 * (0.5 + 0.5 * Math.cos(p * Math.PI * 4));
 }

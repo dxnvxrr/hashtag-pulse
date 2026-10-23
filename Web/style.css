@@ -161,6 +161,25 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outl
 .verify.bad { color: var(--miss); }
 .share-text { min-height: 1.5em; }
 
+/* ---------- Daily streak + challenge card */
+.daily { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.daily-days { display: flex; gap: 8px; }
+.daily-days i { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line); display: block; }
+.daily-days i.on { background: var(--gold); border-color: var(--gold); box-shadow: 0 0 8px color-mix(in srgb, var(--gold) 55%, transparent); }
+.daily-days i.today { border-color: var(--gold); }
+.daily[data-status="due"] .small { color: var(--gold); }
+.challenge-card {
+  width: 100%; display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left;
+  border: 1px solid var(--gold); border-radius: 12px; background: color-mix(in srgb, var(--gold) 8%, var(--ink));
+}
+.challenge-card .eyebrow { color: var(--gold); }
+.challenge-text { margin: 0; font-size: 14px; line-height: 1.45; }
+.challenge-actions { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+.challenge-actions .hud-btn { color: var(--ring); }
+.challenge-result { margin: 0; font: 700 14px/1.4 var(--font-body); }
+.challenge-result[data-outcome="win"] { color: var(--gold); }
+.challenge-result[data-outcome="lose"] { color: var(--miss); }
+
 /* ---------- Prestige unlock toast */
 .toast {
   position: absolute; left: 50%; top: calc(64px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);

@@ -85,7 +85,7 @@ export function refillFor(mode: RunMode): number {
 
 export function livesFor(mode: RunMode): number {
   if (mode === 'ZEN') return GameRules.runMaxRings;
-  if (mode === 'RANKED') return GameRules.rankedLives;
+  if (mode === 'RANKED' || mode === 'DUEL') return GameRules.rankedLives;
   return GameRules.maxMisses;
 }
 
@@ -98,7 +98,8 @@ export function gauntletSeed(day = utcDay()): number {
   return createHmac('sha256', config.JWT_ACCESS_SECRET).update(`gauntlet:${day}`).digest().readUInt32LE(0);
 }
 
-export async function startRun(userId: string, mode: RunMode, duelSeed?: number): Promise<RunStartResult> {
+/** `duelSeed`/`duelBaseMs`: a challenge replays the friend's exact rings (their seed and ring speed). */
+export async function startRun(userId: string, mode: RunMode, duelSeed?: number, duelBaseMs?: number): Promise<RunStartResult> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { precisionRating: true, bestDeltaUs: true, status: true } });
   if (!user) throw Errors.notFound('user_not_found');
   if (user.status !== 'ACTIVE' && user.status !== 'QUARANTINED') throw Errors.forbidden('account_inactive');
@@ -117,7 +118,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number)
         throw Errors.badRequest('bad_duel_seed', 'Duel requires a uint32 seed');
       }
       seed = duelSeed;
-      baseDurationMs = FIXED_BASE_DURATION_MS;
+      baseDurationMs = duelBaseMs ?? FIXED_BASE_DURATION_MS;
       break;
     default:
       seed = randomUint32();

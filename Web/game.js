@@ -13,169 +13,18 @@ import {
   missHalvesCircle,
   LIVES,
   PRESTIGE_MAX,
+  ringLook,
+  lookProgress,
+  lookAlpha,
+  looksUnlocked,
   SLOWMO_FACTOR,
   HUMAN_REACTION_FLOOR_MS,
 } from './core.js';
 import { drawBackground, drawThumbnail, themeInfo } from './backgrounds.js';
-import { Music, themeIndexFor, themeName } from './music.js';
-
-// ============================================================ Storage (per-browser conveniences only)
-
-const store = {
-  get(key, fallback) {
-    try {
-      const v = localStorage.getItem('omt.' + key);
-      return v === null ? fallback : JSON.parse(v);
-    } catch {
-      return fallback;
-    }
-  },
-  set(key, value) {
-    try {
-      localStorage.setItem('omt.' + key, JSON.stringify(value));
-    } catch {
-      /* storage blocked: the game still works, it just forgets */
-    }
-  },
-};
-
-// ============================================================ API client (mirrors NetworkManager.cs)
-
-const enc = new TextEncoder();
-const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
-const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
-const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
-const randomNonce = () => b64(crypto.getRandomValues(new Uint8Array(18))).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-const sha256Hex = async (text) => hex(await crypto.subtle.digest('SHA-256', enc.encode(text)));
-
-class ApiError extends Error {
-  constructor(status, code, message) {
-    super(message || code);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-class Api {
-  constructor() {
-    this.offsetMs = 0;
-    this.session = null;
-    this.hmacKey = null;
-    this.fingerprint = null;
-  }
-
-  localNow() {
-    return performance.timeOrigin + performance.now();
-  }
-  serverNow() {
-    return this.localNow() + this.offsetMs;
-  }
-  /** Server epoch ms → performance.now() timeline (the timeline pointer events are stamped on). */
-  serverToPerf(serverMs) {
-    return performance.now() + (serverMs - this.serverNow());
-  }
-
-  async detect() {
-    if (!window.isSecureContext || !crypto.subtle) return false;
-    try {
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 1500);
-      const r = await fetch('/v1/time', { signal: ctl.signal, cache: 'no-store' });
-      clearTimeout(timer);
-      if (!r.ok) return false;
-      const j = await r.json();
-      return typeof j.serverTimeMs === 'number';
-    } catch {
-      return false;
-    }
-  }
-
-  async syncClock(samples = 3) {
-    let bestRtt = Infinity;
-    for (let i = 0; i < samples; i++) {
-      const t0 = this.localNow();
-      const { serverTimeMs } = await this.request('GET', '/v1/time', undefined, { auth: 'none' });
-      const t1 = this.localNow();
-      if (t1 - t0 < bestRtt) {
-        bestRtt = t1 - t0;
-        this.offsetMs = serverTimeMs - (t0 + (t1 - t0) / 2);
-      }
-    }
-  }
-
-  async login() {
-    if (!this.fingerprint) {
-      let deviceId = store.get('deviceId', null);
-      if (!deviceId) {
-        deviceId = crypto.randomUUID();
-        store.set('deviceId', deviceId);
-      }
-      this.fingerprint = await sha256Hex(`web|${deviceId}`);
-    }
-    const refreshToken = store.get('refreshToken', null);
-    if (refreshToken) {
-      try {
-        await this.applySession(await this.request('POST', '/v1/auth/refresh', { refreshToken, deviceFingerprint: this.fingerprint }, { auth: 'none' }));
-        return;
-      } catch (e) {
-        if (!(e instanceof ApiError) || e.status >= 500 || e.status === 0) throw e;
-        store.set('refreshToken', null);
-      }
-    }
-    const isMinor = store.get('ageGateAnswered', false) ? store.get('isMinor', true) : true;
-    const res = await this.request('POST', '/v1/auth/guest', { deviceFingerprint: this.fingerprint, platform: 'WEB', model: navigator.userAgent.slice(0, 120), isMinor }, { auth: 'none' });
-    await this.applySession(res);
-  }
-
-  async applySession(s) {
-    this.session = s;
-    this.hmacKey = await crypto.subtle.importKey('raw', b64urlToBytes(s.sessionKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    store.set('refreshToken', s.refreshToken);
-  }
-
-  async request(method, path, body, { auth = 'signed', retries = 2, recovered = false } = {}) {
-    const raw = body === undefined ? (method === 'GET' ? '' : '{}') : JSON.stringify(body);
-    for (let attempt = 0; ; attempt++) {
-      const headers = { accept: 'application/json' };
-      if (raw) headers['content-type'] = 'application/json';
-      if (auth !== 'none') {
-        if (!this.session) throw new ApiError(401, 'no_session');
-        headers.authorization = 'Bearer ' + this.session.accessToken;
-        headers['x-device-fingerprint'] = this.fingerprint;
-      }
-      if (auth === 'signed') {
-        const ts = String(Math.round(this.serverNow()));
-        const nonce = randomNonce();
-        const canonical = `${method}\n${path}\n${ts}\n${nonce}\n${await sha256Hex(raw)}`;
-        headers['x-timestamp'] = ts;
-        headers['x-nonce'] = nonce;
-        headers['x-signature'] = b64(await crypto.subtle.sign('HMAC', this.hmacKey, enc.encode(canonical)));
-      }
-
-      let status = 0;
-      let json = null;
-      try {
-        const r = await fetch(path, { method, headers, body: method === 'GET' ? undefined : raw, cache: 'no-store' });
-        status = r.status;
-        json = await r.json().catch(() => null);
-        if (r.ok) return json;
-      } catch {
-        status = 0;
-      }
-
-      const err = new ApiError(status, json?.error ?? (status ? `http_${status}` : 'network_error'), json?.message);
-      if (status === 401 && auth !== 'none' && !recovered && ['invalid_access_token', 'session_expired', 'no_session'].includes(err.code)) {
-        await this.login();
-        return this.request(method, path, body, { auth, retries, recovered: true });
-      }
-      const retryable = status === 0 || status === 429 || status >= 500;
-      if (!retryable || attempt >= retries) throw err;
-      await sleep(Math.min(4000, 250 * 2 ** attempt) / 2 + Math.random() * 250 * 2 ** attempt);
-    }
-  }
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+import { Music, themeIndexFor, themeName, intensityForStreak } from './music.js';
+import { dayKey, recordPlay, streakStatus, emptyStreak, encodeChallenge, decodeChallenge, compareChallenge } from './progress.js';
+import { store } from './store.js';
+import { Api, ApiError, sleep } from './api.js';
 
 // ============================================================ Audio + haptics (procedural, nothing to load)
 
@@ -242,6 +91,9 @@ const fx = {
   setMusicTheme(level) {
     this.music?.setTheme(themeIndexFor(level));
   },
+  setStreak(streak) {
+    this.music?.setIntensity(intensityForStreak(streak));
+  },
   tone(freq, dur, { type = 'sine', gain = 0.18, endFreq = null, delay = 0 } = {}) {
     if (!this.ctx || this.sfxVolume <= 0) return;
     const t = this.ctx.currentTime + delay;
@@ -260,13 +112,16 @@ const fx = {
   vibrate(pattern) {
     if (this.haptics && navigator.vibrate) navigator.vibrate(pattern);
   },
-  verdict(v) {
+  /** `streak` raises the PERFECT chime a semitone per hit in a row, up to an octave. */
+  verdict(v, streak = 0) {
     switch (v) {
-      case 'PERFECT':
-        this.tone(880, 0.5, { gain: 0.22 });
-        this.tone(1760, 0.3, { gain: 0.06 });
+      case 'PERFECT': {
+        const f = 880 * 2 ** (Math.min(streak, 12) / 12);
+        this.tone(f, 0.5, { gain: 0.22 });
+        this.tone(f * 2, 0.3, { gain: 0.06 });
         this.vibrate(18);
         break;
+      }
       case 'CLEAN':
         this.tone(660, 0.12, { type: 'triangle', gain: 0.14 });
         this.vibrate(8);
@@ -320,7 +175,13 @@ function resize() {
 // ---- Prestige background layer (its own canvas, drawn under the ring)
 let bgLevel = 0;
 let bgDirty = true;
-const bgEpoch = performance.now();
+let bgTime = 4.2; // scene clock in seconds; runs faster while the background pulses
+// Reactions to play, each decaying from 1 to 0: pulse (PERFECT), gold (circle filled), dim (miss).
+const bgFx = { pulse: 0, gold: 0, dim: 0 };
+
+function reactBackground(kind, amount = 1) {
+  bgFx[kind] = Math.max(bgFx[kind], amount);
+}
 
 function setBackground(level) {
   if (level === bgLevel) return;
@@ -333,19 +194,36 @@ function setBackground(level) {
   }, 220);
 }
 
-function renderBackground(now) {
-  if (bgLevel === 0) {
-    if (bgDirty) bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-    bgDirty = false;
-    return;
-  }
-  // Reduced motion: a still frame, redrawn only when something changes.
-  if (fx.reducedMotion && !bgDirty) return;
+function renderBackground(dt) {
+  const reacting = bgFx.pulse > 0.01 || bgFx.gold > 0.01 || bgFx.dim > 0.01;
+  for (const k in bgFx) bgFx[k] = Math.max(0, bgFx[k] - dt * (k === 'dim' ? 2.2 : 1.6));
+  if (!fx.reducedMotion) bgTime += dt * (1 + 2.5 * bgFx.pulse);
+  // Static scenes (default, or reduced motion) are redrawn only when something changes.
+  if ((bgLevel === 0 || fx.reducedMotion) && !bgDirty && !reacting) return;
+  bgDirty = false;
+
   const g = geometry();
   bgCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const t = fx.reducedMotion ? 4.2 : (now - bgEpoch) / 1000;
-  drawBackground(bgCtx, W, H, t, bgLevel, g.cx, g.cy, game.run ? g.start : 0);
-  bgDirty = false;
+  bgCtx.clearRect(0, 0, W, H);
+  if (bgLevel > 0) {
+    if (bgFx.pulse > 0 && !fx.reducedMotion) {
+      const k = 1 + 0.03 * bgFx.pulse;
+      bgCtx.setTransform(DPR * k, 0, 0, DPR * k, DPR * g.cx * (1 - k), DPR * g.cy * (1 - k));
+    }
+    drawBackground(bgCtx, W, H, bgTime, bgLevel, g.cx, g.cy, game.run ? g.start : 0);
+    bgCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  if (bgFx.gold > 0) {
+    const grad = bgCtx.createRadialGradient(g.cx, g.cy, g.target, g.cx, g.cy, Math.max(W, H) * 0.7);
+    grad.addColorStop(0, `rgba(255,200,87,${0.35 * bgFx.gold})`);
+    grad.addColorStop(1, 'rgba(255,200,87,0)');
+    bgCtx.fillStyle = grad;
+    bgCtx.fillRect(0, 0, W, H);
+  }
+  if (bgFx.dim > 0) {
+    bgCtx.fillStyle = `rgba(0,0,0,${0.55 * bgFx.dim})`;
+    bgCtx.fillRect(0, 0, W, H);
+  }
 }
 window.addEventListener('resize', resize);
 
@@ -360,9 +238,13 @@ const COLORS = {
 };
 
 // Preallocated particle + shockwave pools: no allocation inside the frame loop.
-const particles = Array.from({ length: 96 }, () => ({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, color: '' }));
-const waves = Array.from({ length: 8 }, () => ({ alive: false, x: 0, y: 0, r: 0, life: 0, color: '' }));
+const particles = Array.from({ length: 160 }, () => ({ alive: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, color: '' }));
+const waves = Array.from({ length: 8 }, () => ({ alive: false, x: 0, y: 0, r: 0, life: 0, color: '', reach: 0.3 }));
 let punchUntil = 0;
+const shake = { until: 0, mag: 0 };
+
+/** Streak scale for effects: 0 on the first hit, 1 from 20 in a row. */
+const streakScale = (streak) => Math.min(streak, 20) / 20;
 
 function burst(x, y, color, count, speed) {
   if (fx.reducedMotion) return;
@@ -383,7 +265,7 @@ function burst(x, y, color, count, speed) {
   }
 }
 
-function shockwave(x, y, r, color) {
+function shockwave(x, y, r, color, reach = 0.3) {
   const w = waves.find((q) => !q.alive);
   if (!w) return;
   w.alive = true;
@@ -392,6 +274,7 @@ function shockwave(x, y, r, color) {
   w.r = r;
   w.life = 0;
   w.color = color;
+  w.reach = reach;
 }
 
 const geometry = () => {
@@ -418,10 +301,15 @@ function render(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
 
-  renderBackground(now);
+  renderBackground(dt);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   const g = geometry();
+
+  if (now < shake.until && !fx.reducedMotion) {
+    const k = shake.mag * ((shake.until - now) / 140);
+    ctx.translate((Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
+  }
 
   if (now < punchUntil && !fx.reducedMotion) {
     ctx.translate(g.cx, g.cy);
@@ -433,10 +321,11 @@ function render(now) {
   let x = g.cx;
   if (run) {
     const ring = run.cur;
-    if (ring && ring.archetype === 1 && !fx.reducedMotion) {
+    if (ring && ring.look === 'drifter' && !fx.reducedMotion) {
       const p = Math.min(1.2, Math.max(0, (now - ring.spawnPerf) / (ring.closePerf - ring.spawnPerf)));
       x = g.cx + ring.drift * Math.min(W * 0.22, 160) * (p - 0.5) * 2;
     }
+    run.ringX = x;
 
     // The golden circle around the target. Ranked: fills one segment per hit in a row; full = next Prestige level.
     // Zen: shows progress to the next streak milestone.
@@ -473,16 +362,24 @@ function render(now) {
       ctx.fillText(`${run.circleHalf / 2} / ${prestigeCircleSize(run.prestige + 1)}`, x, g.cy - g.target - 22);
       ctx.textAlign = 'start';
     }
+    if (run.streak >= 3) {
+      ctx.globalAlpha = 0.55 + 0.45 * streakScale(run.streak);
+      ctx.fillStyle = COLORS.gold;
+      ctx.font = '800 12px "Manrope", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`STREAK ${run.streak}`, x, g.cy - g.target - 40);
+      ctx.textAlign = 'start';
+    }
     ctx.globalAlpha = 1;
 
     drawCircle(x, g.cy, g.target, COLORS.target, 2);
 
     if (ring && !ring.resolved && now >= ring.spawnPerf) {
       const p = (now - ring.spawnPerf) / (ring.closePerf - ring.spawnPerf);
-      const r = g.start - (g.start - g.target) * p;
-      const fadeIn = Math.min(1, (now - ring.spawnPerf) / 140);
+      const r = g.start - (g.start - g.target) * lookProgress(ring.look, p);
+      const alpha = Math.min(1, (now - ring.spawnPerf) / 140) * lookAlpha(ring.look, p);
       const color = ring.slow ? COLORS.slowmo : COLORS.ring;
-      if (r > 0) drawCircle(x, g.cy, r, color, 3, fadeIn, 18);
+      if (r > 0) drawCircle(x, g.cy, r, color, 3, alpha, 18);
     } else if (ring && !ring.resolved && now >= ring.spawnPerf - 160) {
       // Inhale: the target pulses just before the next ring draws on.
       drawCircle(x, g.cy, g.target * (1 + (ring.spawnPerf - now) / 900), COLORS.target, 1, 0.5);
@@ -502,7 +399,7 @@ function render(now) {
       w.alive = false;
       continue;
     }
-    drawCircle(w.x, w.y, w.r + t * Math.min(W, H) * 0.3, w.color, 3 * (1 - t), 1 - t, 20);
+    drawCircle(w.x, w.y, w.r + t * Math.min(W, H) * w.reach, w.color, 3 * (1 - t), 1 - t, 20);
   }
   for (const p of particles) {
     if (!p.alive) continue;
@@ -542,6 +439,10 @@ const game = {
     prestige: Math.min(PRESTIGE_MAX, Math.max(0, Number(store.get('prestige', 0)) || 0)),
   },
   equipped: Number(store.get('equippedBg', 0)) || 0,
+  daily: { ...emptyStreak(), ...store.get('daily', {}) },
+  /** A friend's challenge from the page link (#c-…), or null. */
+  challenge: decodeChallenge(location.hash),
+  seenLooks: store.get('seenLooks', []),
   /** How the server lets this client claim an ad reward: 'attest' | 'dev' | 'none' (offline: local). */
   webAdRewards: 'local',
 };
@@ -577,16 +478,22 @@ function equip(level) {
 }
 
 let toastTimer = 0;
-function showToast(level) {
+function showToast(eyebrow, name) {
   const t = $('toast');
-  $('toast-level').textContent = String(level);
-  $('toast-name').textContent = themeInfo(level).name;
+  $('toast-eyebrow').textContent = eyebrow;
+  $('toast-name').textContent = name;
   t.hidden = true;
   void t.offsetWidth; // restart the CSS animation
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
+
+const LOOK_TIPS = {
+  ghost: 'Ghost ring · fades in and out',
+  stutter: 'Stutter ring · closes in jumps',
+  eclipse: 'Eclipse ring · tap the second close',
+};
 
 function renderHud() {
   const run = game.run;
@@ -628,13 +535,15 @@ function showVerdict(v, deltaUs, tapped) {
 
 // ============================================================ Run lifecycle
 
-async function startRun() {
+/** `challenge`: a decoded challenge link; the run replays the friend's exact rings (same seed, speed and looks). */
+async function startRun(challenge = null) {
   fx.unlock();
-  const mode = game.mode;
+  const mode = challenge ? 'CHALLENGE' : game.mode;
   let params;
   if (game.online) {
     try {
-      const res = await api.request('POST', '/v1/runs/start', { mode });
+      const body = challenge ? { mode: 'DUEL', duelSeed: challenge.seed, duelBaseMs: challenge.base } : { mode };
+      const res = await api.request('POST', '/v1/runs/start', body);
       params = {
         runId: res.runId,
         seed: res.seed,
@@ -653,8 +562,8 @@ async function startRun() {
     const ftue = mode === 'RANKED' && game.profile.bestUs === null;
     params = {
       runId: null,
-      seed: crypto.getRandomValues(new Uint32Array(1))[0],
-      base: ftue ? 2500 : baseDurationForRating(game.profile.rating),
+      seed: challenge ? challenge.seed : crypto.getRandomValues(new Uint32Array(1))[0],
+      base: challenge ? challenge.base : ftue ? 2500 : baseDurationForRating(game.profile.rating),
       ftue,
       maxRings: 500,
       maxMisses: LIVES[mode],
@@ -666,6 +575,8 @@ async function startRun() {
     ...params,
     mode,
     online: game.online && params.runId !== null,
+    challenge,
+    looks: challenge ? challenge.block : looksUnlocked(game.profile.prestige),
     schedule: new RingSchedule(params.seed, params.base),
     cur: null,
     tapsUs: [],
@@ -692,6 +603,8 @@ async function startRun() {
   $('hint').hidden = !params.ftue && store.get('seenHint', false);
   scheduleRing(0);
   setScreen(null);
+  $('slowmo').hidden = mode === 'CHALLENGE'; // challenges compare raw skill
+  fx.setStreak(0);
   renderHud();
 }
 
@@ -708,9 +621,10 @@ function scheduleRing(resolveUs, resumeAtUs = null) {
   }
   const durationUs = slow ? p.durationMs * SLOWMO_FACTOR * 1000 : p.durationMs * 1000;
   const windowMs = closeWindowMs(run.ftue, p.index);
+  const look = ringLook(run.seed, p.index, p.archetype, run.looks);
   run.cur = {
     index: p.index,
-    archetype: p.archetype,
+    look,
     drift: p.drift,
     slow,
     spawnUs,
@@ -731,6 +645,12 @@ function tick(now) {
   if (!ring.spawned && now >= ring.spawnPerf) {
     ring.spawned = true;
     fx.spawn();
+    if (LOOK_TIPS[ring.look] && !game.seenLooks.includes(ring.look)) {
+      // First sighting of a new ring type: a one-time tip.
+      game.seenLooks.push(ring.look);
+      store.set('seenLooks', game.seenLooks);
+      showToast('NEW RING', LOOK_TIPS[ring.look]);
+    }
     renderHud();
   }
   // Small grace so a tap event stamped before the deadline but dispatched late still counts.
@@ -778,15 +698,25 @@ function resolveRing(tapUs) {
   run.rings.push({ verdict, deltaUs: tapUs === null ? null : deltaUs, slow: ring.slow });
   run.ticks += ticksFor(verdict);
 
-  fx.verdict(verdict);
+  // Effects grow with the streak this hit extends (a miss resets it below).
+  const nextStreak = verdict === 'MISS' ? 0 : run.streak + 1;
+  const k = streakScale(nextStreak);
+  const x = run.ringX ?? g.cx;
+  fx.verdict(verdict, nextStreak);
   showVerdict(verdict, deltaUs, tapUs !== null);
   if (verdict === 'PERFECT') {
-    punchUntil = performance.now() + 8 * 4;
-    shockwave(g.cx, g.cy, g.target, COLORS.gold);
-    burst(g.cx, g.cy, COLORS.gold, 40, 420);
+    punchUntil = performance.now() + 32;
+    shake.until = performance.now() + 140;
+    shake.mag = 3 + 9 * k;
+    shockwave(x, g.cy, g.target, COLORS.gold, 0.3 + 0.3 * k);
+    burst(x, g.cy, COLORS.gold, 40 + Math.round(60 * k), 420 + 260 * k);
+    reactBackground('pulse');
   } else if (verdict === 'CLEAN') {
-    shockwave(g.cx, g.cy, g.target, COLORS.clean);
-    burst(g.cx, g.cy, COLORS.clean, 14, 260);
+    shake.until = performance.now() + 100;
+    shake.mag = 1 + 4 * k;
+    shockwave(x, g.cy, g.target, COLORS.clean, 0.3 + 0.15 * k);
+    burst(x, g.cy, COLORS.clean, 14 + Math.round(30 * k), 260 + 160 * k);
+    reactBackground('pulse', 0.5);
   } else if (verdict === 'CLOSE') {
     canvas.classList.add('desat');
     setTimeout(() => canvas.classList.remove('desat'), 120);
@@ -794,16 +724,19 @@ function resolveRing(tapUs) {
     const v = $('vignette');
     v.classList.add('on');
     requestAnimationFrame(() => requestAnimationFrame(() => v.classList.remove('on')));
+    reactBackground('dim');
   }
 
   if (verdict === 'MISS') {
     run.misses++;
     run.streak = 0;
+    fx.setStreak(0);
     // Same rule as applyPrestige (core.js / server): levels X1–X7 keep half the circle, X8–X10 empty it.
     if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) run.circleHalf = circleAfterMiss(run.circleHalf, run.prestige + 1);
   } else {
     run.streak++;
     run.bestStreak = Math.max(run.bestStreak, run.streak);
+    fx.setStreak(run.streak);
     if (run.mode === 'RANKED' && run.prestige < PRESTIGE_MAX) {
       // Same rule as applyPrestige: PERFECT +2, CLEAN +1.5, SO CLOSE +1; overflow carries over.
       run.circleHalf += prestigeHalfPoints(verdict);
@@ -816,7 +749,7 @@ function resolveRing(tapUs) {
       if (run.prestige >= PRESTIGE_MAX) run.circleHalf = 0;
     } else if (run.mode === 'ZEN' && [10, 25, 50, 100].includes(run.streak)) {
       fx.milestone();
-      burst(g.cx, g.cy, COLORS.gold, 60, 520);
+      burst(x, g.cy, COLORS.gold, 60, 520);
     }
   }
   renderHud();
@@ -837,11 +770,13 @@ function resolveRing(tapUs) {
 /** A full golden circle mid-run: celebrate, unlock and equip the new background straight away. */
 function unlockPrestige(level) {
   const g = geometry();
+  const x = game.run?.ringX ?? g.cx;
   fx.prestige();
-  shockwave(g.cx, g.cy, g.target, COLORS.gold);
-  shockwave(g.cx, g.cy, g.target * 1.6, COLORS.gold);
-  burst(g.cx, g.cy, COLORS.gold, 80, 600);
-  showToast(level);
+  shockwave(x, g.cy, g.target, COLORS.gold, 0.6);
+  shockwave(x, g.cy, g.target * 1.6, COLORS.gold, 0.6);
+  burst(x, g.cy, COLORS.gold, 100, 640);
+  reactBackground('gold');
+  showToast(`PRESTIGE ${level} UNLOCKED`, themeInfo(level).name);
   // Kept locally so the background appears now; the server confirms the level when the run is submitted.
   game.profile.prestige = Math.max(game.profile.prestige, level);
   store.set('prestige', game.profile.prestige);
@@ -973,6 +908,8 @@ async function endRun() {
     prestige: run.prestige,
     unlocked: run.unlocked,
   };
+  run.score = challengeScore(run);
+  if (run.mode === 'RANKED' && run.verdicts.length > 0) run.daily = recordDaily();
   renderResults(run, local, best, before, null);
 
   if (run.verdicts.length === 0) return;
@@ -1021,6 +958,36 @@ async function endRun() {
   } catch (e) {
     renderResults(run, local, best, before, { kind: 'error', code: e.code ?? 'network_error' });
   }
+}
+
+/** "6 rings (avg 0.004s)"; no average when nothing was hit. */
+function scoreText({ hits, avgUs }) {
+  return hits ? `${hits} ring${hits === 1 ? '' : 's'} (avg ${fmtDelta(avgUs, false)})` : '0 rings';
+}
+
+/** Challenge score: hits and average |delta| within the first 5 lives, so ad refills and Zen don't inflate it. */
+function challengeScore(run) {
+  let misses = 0;
+  let hits = 0;
+  let sum = 0;
+  for (const r of run.rings) {
+    if (r.verdict === 'MISS') {
+      if (++misses >= LIVES.RANKED) break;
+      continue;
+    }
+    hits++;
+    sum += Math.abs(r.deltaUs);
+  }
+  return { hits, avgUs: hits ? Math.round(sum / hits) : 0 };
+}
+
+/** Counts today toward the daily streak (first Ranked run of the day) and returns what changed. */
+function recordDaily() {
+  const result = recordPlay(game.daily, dayKey(new Date()));
+  game.daily = result.state;
+  store.set('daily', game.daily);
+  renderDaily();
+  return result;
 }
 
 function saveProfile() {
@@ -1084,9 +1051,67 @@ function renderResults(run, result, best, before, verification) {
     v.textContent = `Run ${verification.res.status.toLowerCase()} by anti-cheat (${verification.res.reason}). No rewards.`;
   }
 
-  const shareBest = best === null ? 'no taps' : `best tap ${fmtDelta(best, false)}`;
-  $('share').dataset.text = `One More Tap · ${run.mode} · ${shareBest} · ${result.verdicts.length} rings · seed ${run.seed}. Beat that.`;
+  const daily = run.daily;
+  const dailyEl = $('r-daily');
+  dailyEl.hidden = !daily || daily.event === 'same-day';
+  if (daily && daily.event !== 'same-day') {
+    const notes = [];
+    if (daily.anchorsUsed) notes.push(`${daily.anchorsUsed} Anchor${daily.anchorsUsed > 1 ? 's' : ''} saved it`);
+    if (daily.event === 'reset') notes.push('streak restarted');
+    if (daily.anchorEarned) notes.push('Anchor earned');
+    dailyEl.textContent = `DAY STREAK ${daily.state.streak}${notes.length ? ` · ${notes.join(' · ')}` : ''}`;
+  }
+
+  const challengeEl = $('r-challenge');
+  challengeEl.hidden = !run.challenge;
+  if (run.challenge) {
+    const outcome = compareChallenge(run.score, run.challenge);
+    challengeEl.dataset.outcome = outcome;
+    const verdict = outcome === 'win' ? 'You win' : outcome === 'lose' ? 'They win' : 'Dead heat';
+    challengeEl.textContent = `${verdict}: ${scoreText(run.score)} vs their ${scoreText(run.challenge)}`;
+  }
+
+  // The link replays these exact rings for a friend: same seed, speed and ring looks.
+  const code = encodeChallenge({ seed: run.seed, base: run.base, block: run.looks, hits: run.score.hits, avgUs: run.score.avgUs });
+  const shareBase = document.querySelector('meta[name="omt-share-url"]')?.content || location.origin + location.pathname;
+  $('share').dataset.text = `I hit ${scoreText(run.score)} in One More Tap. Beat my exact rings: ${shareBase}#${code}`;
   $('share-text').textContent = '';
+}
+
+// ============================================================ Title: daily streak + challenge card
+
+function renderDaily() {
+  const d = game.daily;
+  const today = dayKey(new Date());
+  const days = $('daily-days');
+  days.textContent = '';
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const key = dayKey(date);
+    const dot = document.createElement('i');
+    dot.className = d.played.includes(key) ? 'on' : key === today ? 'today' : '';
+    dot.title = key;
+    days.append(dot);
+  }
+  const status = streakStatus(d, today);
+  const anchors = d.anchors ? ` · ${d.anchors} Anchor${d.anchors > 1 ? 's' : ''}` : '';
+  const line = {
+    none: 'Play Ranked today to start a day streak.',
+    done: `Day streak ${d.streak}${anchors}. Come back tomorrow.`,
+    due: `Day streak ${d.streak}${anchors}. Play Ranked today to keep it.`,
+    anchored: `Day streak ${d.streak}${anchors}. Your Anchors will cover the missed days.`,
+    lost: `Your ${d.streak}-day streak ended. Play Ranked to start a new one.`,
+  }[status];
+  $('daily-text').textContent = line;
+  $('daily').dataset.status = status;
+}
+
+function renderChallengeCard() {
+  const c = game.challenge;
+  $('challenge-card').hidden = !c;
+  if (!c) return;
+  $('challenge-text').textContent = `A friend hit ${scoreText(c)}. Play their exact rings and beat it.`;
 }
 
 // ============================================================ Unlocks menu
@@ -1216,7 +1241,12 @@ for (const btn of document.querySelectorAll('.mode')) {
 }
 
 $('start').addEventListener('click', () => startRun());
-$('again').addEventListener('click', () => startRun());
+$('again').addEventListener('click', () => startRun(game.run?.challenge ?? null));
+$('challenge-accept').addEventListener('click', () => startRun(game.challenge));
+$('challenge-dismiss').addEventListener('click', () => {
+  game.challenge = null;
+  renderChallengeCard();
+});
 $('menu').addEventListener('click', () => {
   game.run = null;
   renderProfile();
@@ -1300,16 +1330,28 @@ async function connect() {
 }
 
 // Read-only test hook (used by the automated browser test). Exposes nothing the server trusts.
-if (location.hash === '#debug') {
+if (location.hash.endsWith('debug')) {
   window.omtDebug = game;
   window.omtFx = fx;
+  window.omtBg = bgFx;
+}
+
+/** Web fonts load after first paint; the system fallback stack shows until they arrive. */
+function loadFonts() {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://fonts.googleapis.com/css2?family=Martian+Mono:wght@500;800&family=Manrope:wght@400;600;800&display=swap';
+  document.head.append(link);
 }
 
 resize();
 renderProfile();
+renderDaily();
+renderChallengeCard();
 if (game.equipped > game.profile.prestige) game.equipped = 0;
 bgLevel = game.equipped;
 loadAdNetwork();
 setScreen('title-screen');
 requestAnimationFrame(render);
+requestAnimationFrame(loadFonts);
 connect();

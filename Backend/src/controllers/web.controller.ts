@@ -1,7 +1,8 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { config } from '../config.js';
+import { gzipSync } from 'node:zlib';
+import { config, isProduction } from '../config.js';
 
 /**
  * Serves the playable web client (Web/) at /play. A fixed allow-list of files — no path joins from user input,
@@ -11,6 +12,9 @@ const FILES: Record<string, string> = {
   'index.html': 'text/html; charset=utf-8',
   'game.js': 'text/javascript; charset=utf-8',
   'core.js': 'text/javascript; charset=utf-8',
+  'store.js': 'text/javascript; charset=utf-8',
+  'api.js': 'text/javascript; charset=utf-8',
+  'progress.js': 'text/javascript; charset=utf-8',
   'backgrounds.js': 'text/javascript; charset=utf-8',
   'music.js': 'text/javascript; charset=utf-8',
   'style.css': 'text/css; charset=utf-8',
@@ -40,24 +44,40 @@ export async function webController(app: FastifyInstance): Promise<void> {
   const root = resolve(config.WEB_ROOT);
   const noLimit = { config: { rateLimit: false as const } };
 
-  const send = async (name: string, reply: import('fastify').FastifyReply) => {
-    const type = FILES[name];
-    if (!type) return reply.code(404).send({ error: 'not_found' });
-    let body: Buffer | string = await readFile(resolve(root, name));
-    const ads = /^ca-pub-\d{10,20}$/.test(config.WEB_AD_CLIENT);
+  const ads = /^ca-pub-\d{10,20}$/.test(config.WEB_AD_CLIENT);
+  const csp = pageCsp(ads);
+  // Files are read and gzipped once in production (they're immutable in the image); re-read each time in development.
+  const cache = new Map<string, { raw: Buffer; gz: Buffer }>();
+
+  const load = async (name: string) => {
+    const hit = cache.get(name);
+    if (hit) return hit;
+    let raw = await readFile(resolve(root, name));
     if (name === 'index.html' && ads) {
       // The client turns ads on when it finds this tag (Web/game.js loadAdNetwork).
-      body = body.toString('utf8').replace('<!--ARTIFACT-HEAD-START-->', `<meta name="omt-ad-client" content="${config.WEB_AD_CLIENT}">\n<!--ARTIFACT-HEAD-START-->`);
+      raw = Buffer.from(raw.toString('utf8').replace('<!--ARTIFACT-HEAD-START-->', `<meta name="omt-ad-client" content="${config.WEB_AD_CLIENT}">\n<!--ARTIFACT-HEAD-START-->`));
     }
-    return reply
+    const entry = { raw, gz: gzipSync(raw, { level: 9 }) };
+    if (isProduction) cache.set(name, entry);
+    return entry;
+  };
+
+  const send = async (name: string, req: FastifyRequest, reply: FastifyReply) => {
+    const type = FILES[name];
+    if (!type) return reply.code(404).send({ error: 'not_found' });
+    const { raw, gz } = await load(name);
+    const gzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+    reply
       .header('content-type', type)
-      .header('content-security-policy', pageCsp(ads))
+      .header('content-security-policy', csp)
       .header('cache-control', 'no-cache')
-      .send(body);
+      .header('vary', 'accept-encoding');
+    if (gzip) reply.header('content-encoding', 'gzip');
+    return reply.send(gzip ? gz : raw);
   };
 
   app.get('/', noLimit, async (_req, reply) => reply.redirect('/play/'));
   app.get('/play', noLimit, async (_req, reply) => reply.redirect('/play/'));
-  app.get('/play/', noLimit, async (_req, reply) => send('index.html', reply));
-  app.get<{ Params: { file: string } }>('/play/:file', noLimit, async (req, reply) => send(req.params.file, reply));
+  app.get('/play/', noLimit, async (req, reply) => send('index.html', req, reply));
+  app.get<{ Params: { file: string } }>('/play/:file', noLimit, async (req, reply) => send(req.params.file, req, reply));
 }

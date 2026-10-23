@@ -37,7 +37,25 @@ equip it. The menu also holds separate Music and Sound FX sliders and the haptic
 hidden until earned.
 
 **Music:** procedural chiptune, one theme per block of ten backgrounds (Drift, Prism, … Nova) plus ZERO at 100. It
-follows the equipped background, and higher blocks add more layers (hats, arpeggios, kick). See `Web/music.js`.
+follows the equipped background, and higher blocks add more layers (hats, arpeggios, kick). During a run the streak
+brings in the missing layers: hats at 5 in a row, arpeggio at 10, kick and a doubled lead at 20. A miss drops back to
+the base layer straight away. See `Web/music.js`.
+
+**Juice:** the background pulses and speeds up on hits, flashes gold on PERFECT and dims on a miss. Shake, particles,
+shockwaves and the PERFECT chime's pitch all grow with the streak, which shows from 3 in a row.
+
+**Ring types** (visual only; timing and scoring are unchanged and match the server): Prestige 10 adds Ghost (fades
+out, then back in near the target), 20 adds Stutter (moves in steps), and 30 adds Eclipse (a decoy that touches the
+target early, then opens up again). From ring 5, about 1 in 4 rings uses an unlocked type. A toast explains each one
+the first time it appears.
+
+**Daily streak** (Ranked runs; stored on the device): play every day to grow it. Every 7th day in a row earns an
+Anchor (max 2). An Anchor covers one missed day. The title screen shows the last 7 days and whether today is done.
+
+**Challenge links:** after a run, CHALLENGE A FRIEND shares a link (`#c-seed-base-block-hits-avgUs`). The link replays
+your exact rings: same seed, speed and ring types, 5 lives, no Slow-Mo, no ad refill. More hits wins; equal hits go
+to the lower average. Online, the challenge is a server-verified DUEL run. For an offline single-file build,
+`node Web/build-artifact.mjs <out.html> <public page URL>` puts that URL in shared links.
 
 **Slow-Mo** rings run at 0.4x and are scored in game time, so every verdict window is 2.5x wider in real time.
 Slow-Mo rings never count toward your best tap or Precision rating, because tickets can be bought.
@@ -46,6 +64,14 @@ Slow-Mo rings never count toward your best tap or Precision rating, because tick
 server adds the ad tag and the CSP hosts it needs. Without it the popup is a house ad and earns nothing. Web ads send
 no server callback, so extra lives are claimed by client attestation (`WEB_ADS_CLIENT_ATTESTED=true`), still limited
 by the server's cool-down and daily cap. In development the dev simulator is used instead.
+
+## Load time
+
+`Web/` is plain ES modules with no framework or build step: `core`, `store`, `api`, `progress`, `backgrounds`,
+`music`, `game`. They're modulepreloaded and gzipped by the server (about 30 KB of JS over the wire). Fonts load
+after the first frame and never block play. Measured cold, with no cache, on a throttled phone profile (1.6 Mbps,
+150 ms RTT, 4x CPU slowdown): title interactive in about 0.7 s, first ring on screen about 2.1 s after tapping play.
+The budget is 8 s.
 
 ## Tests
 
@@ -56,6 +82,7 @@ cd Backend && npm test
 - Ring-schedule golden vectors (TypeScript ≡ C# ≡ web).
 - Verdict windows, bot and reaction-floor flags, slow-mo in game time, rewarded-ad resumes.
 - Prestige circles and rating: web client ≡ server.
+- Daily streak and Anchors, challenge codes, ring types, music intensity.
 - Web client verdicts versus server re-simulation.
 - Unity `RunSession` versus server re-simulation. Needs `mcs` and `mono`; the test is skipped when they're absent.
 
@@ -91,7 +118,7 @@ Optional SDKs compile only when their scripting define is set:
 - **Slow-Mo** is a dedicated button, not the GDD's long-press. Taps fire on press-down, so every long-press would
   also have been a tap.
 - **Offline runs** are practice only. They're never rewarded, because the server must issue the run seed.
-- **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes and no Prestige or backgrounds. The web build is
+- **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes. It has no Prestige, backgrounds, ring types, streaks or challenges. The web build is
   the lead client for now. The server keeps the older modes so the Unity build still works.
 
 ## Background jobs (run inside the API, single-flight via a Redis lock)
