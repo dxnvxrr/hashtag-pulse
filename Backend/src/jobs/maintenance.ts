@@ -5,6 +5,8 @@ import { GameRules } from '../config.js';
 import { prisma } from '../lib/prisma.js';
 import { redis, RedisKeys } from '../lib/redis.js';
 import { audit } from '../lib/audit.js';
+import { ensureLeaderboards } from '../services/leaderboard.service.js';
+import { expirePayouts } from '../services/prize.service.js';
 
 /**
  * Background jobs. They run inside every API replica; a Redis lock makes each pass single-flight across the fleet.
@@ -144,6 +146,9 @@ export function startJobs(log: FastifyBaseLogger): () => void {
     .catch((err) => log.error({ err }, 'telemetry consumer group setup failed'));
   every('expire-runs', 5 * 60_000, 120, expireStaleRuns);
   every('purge-accounts', 60 * 60_000, 600, purgeDeletedAccounts);
+  every('expire-payouts', 60 * 60_000, 300, expirePayouts);
+  // One job (one lock): rebuild the boards from Postgres when Redis has none or they're 6 hours old.
+  every('boards', 5 * 60_000, 600, ensureLeaderboards);
 
   return () => timers.forEach(clearInterval);
 }

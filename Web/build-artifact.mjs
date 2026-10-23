@@ -20,5 +20,5 @@ const body = between('<!--ARTIFACT-BODY-START-->', '<!--ARTIFACT-BODY-END-->');
 
 // Challenge links need the page's public URL, which a sandboxed page can't read; pass it as the 2nd argument.
 const shareMeta = shareUrl ? `<meta name="omt-share-url" content="${shareUrl}">\n` : '';
-writeFileSync(out, `${shareMeta}${head.trim()}\n${body.trim()}\n<script type="module">\n${core}\n${lib('store.js')}\n${lib('api.js')}\n${lib('progress.js')}\n${lib('backgrounds.js')}\n${lib('music.js')}\n${game}</script>\n`);
+writeFileSync(out, `${shareMeta}${head.trim()}\n${body.trim()}\n<script type="module">\n${core}\n${lib('store.js')}\n${lib('api.js')}\n${lib('progress.js')}\n${lib('backgrounds.js')}\n${lib('music.js')}\n${lib('social.js')}\n${lib('board.js')}\n${game}</script>\n`);
 console.log(`wrote ${out}`);

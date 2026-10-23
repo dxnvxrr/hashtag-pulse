@@ -25,6 +25,8 @@ import { Music, themeIndexFor, themeName, intensityForStreak } from './music.js'
 import { dayKey, recordPlay, streakStatus, emptyStreak, encodeChallenge, decodeChallenge, compareChallenge } from './progress.js';
 import { store } from './store.js';
 import { Api, ApiError, sleep } from './api.js';
+import { halfPoints, makeHandle, regionForTimeZone, REGION_CODES, seasonId } from './social.js';
+import { createBoards } from './board.js';
 
 // ============================================================ Audio + haptics (procedural, nothing to load)
 
@@ -447,7 +449,40 @@ const game = {
   lifetime: { server: store.get('lifetime', null), device: store.get('lifetimeDevice', null) },
   /** How the server lets this client claim an ad reward: 'attest' | 'dev' | 'none' (offline: local). */
   webAdRewards: 'local',
+  /** Leaderboard identity. Offline it lives on the device; online the server's copy replaces it. */
+  player: { name: localHandle(), region: localRegion(), regionLockedUntil: null, ageGateAnswered: store.get('ageGateAnswered', false) },
+  /** This device's Ranked points for the current season (offline and shared-board play). */
+  season: currentSeason(store.get('seasonDevice', null)),
 };
+
+function deviceTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+function localHandle() {
+  let name = store.get('handle', null);
+  if (typeof name !== 'string' || !name) {
+    const r = crypto.getRandomValues(new Uint32Array(3));
+    name = makeHandle(r[0], r[1], r[2]);
+    store.set('handle', name);
+  }
+  return name;
+}
+
+function localRegion() {
+  const saved = store.get('region', undefined);
+  if (saved === null || REGION_CODES.includes(saved)) return saved;
+  return regionForTimeZone(deviceTimeZone());
+}
+
+function currentSeason(saved) {
+  const id = seasonId(new Date());
+  return saved && saved.id === id && Number.isFinite(saved.half) ? saved : { id, half: 0 };
+}
 
 function fmtDelta(us, signed = true) {
   const s = (Math.abs(us) / 1e6).toFixed(3);
@@ -456,7 +491,7 @@ function fmtDelta(us, signed = true) {
 }
 
 function setScreen(id) {
-  for (const s of ['title-screen', 'results-screen', 'ad-screen', 'unlocks-screen']) $(s).hidden = s !== id;
+  for (const s of ['title-screen', 'results-screen', 'ad-screen', 'unlocks-screen', 'board-screen']) $(s).hidden = s !== id;
   const playing = id === null;
   $('hud').hidden = !playing;
   $('slowmo').hidden = !playing;
@@ -574,7 +609,16 @@ async function startRun(challenge = null) {
   if (game.online) {
     try {
       const body = challenge ? { mode: 'DUEL', duelSeed: challenge.seed, duelBaseMs: challenge.base } : { mode };
-      const res = await api.request('POST', '/v1/runs/start', body);
+      let res;
+      try {
+        res = await api.request('POST', '/v1/runs/start', challenge?.runId ? { ...body, challengeRunId: challenge.runId } : body);
+      } catch (e) {
+        // A link from an older or unverified run: still playable as a plain DUEL, compared with the link's numbers.
+        if (e.code !== 'bad_challenge') throw e;
+        res = await api.request('POST', '/v1/runs/start', body);
+      }
+      // The server's copy of the challenger's score wins over the numbers in the link (links can be edited).
+      if (challenge && res.challenge) challenge = { ...challenge, ...res.challenge, verified: true };
       params = {
         runId: res.runId,
         seed: res.seed,
@@ -824,6 +868,8 @@ const adClient = document.querySelector('meta[name="omt-ad-client"]')?.content ?
 function loadAdNetwork() {
   if (!adClient || window.adBreak) return;
   window.adsbygoogle = window.adsbygoogle || [];
+  // COPPA: until the age gate says 13+, only non-personalized ads.
+  if (!store.get('ageGateAnswered', false) || store.get('isMinor', true)) window.adsbygoogle.requestNonPersonalizedAds = 1;
   window.adBreak = window.adConfig = (o) => window.adsbygoogle.push(o);
   const script = document.createElement('script');
   script.async = true;
@@ -940,7 +986,8 @@ async function endRun() {
     unlocked: run.unlocked,
   };
   run.score = challengeScore(run);
-  if (run.mode === 'RANKED' && run.verdicts.length > 0) run.daily = recordDaily();
+  // Offline the device keeps the day streak; online the server does (it arrives with the verified result).
+  if (run.mode === 'RANKED' && run.verdicts.length > 0 && !run.online) run.daily = recordDaily();
   renderResults(run, local, best, before, null);
 
   if (run.verdicts.length === 0) return;
@@ -950,6 +997,9 @@ async function endRun() {
       const d = game.lifetime.device ?? ZERO_LIFETIME;
       game.lifetime.device = { perfects: d.perfects + c.perfects, cleans: d.cleans + c.cleans, closes: d.closes + c.closes, rankedRuns: d.rankedRuns + 1 };
       store.set('lifetimeDevice', game.lifetime.device);
+      const season = currentSeason(game.season);
+      game.season = { id: season.id, half: season.half + halfPoints(c) };
+      store.set('seasonDevice', game.season);
     }
     const p = game.profile;
     p.ticks += local.ticks;
@@ -959,6 +1009,7 @@ async function endRun() {
     if (best !== null && (p.bestUs === null || best < p.bestUs)) p.bestUs = best;
     saveProfile();
     renderResults(run, local, best, before, { kind: 'offline' });
+    if (run.mode === 'RANKED') boards.publishShared();
     return;
   }
 
@@ -983,6 +1034,17 @@ async function endRun() {
         game.profile.slowMoTickets = res.wallet.slowMoTickets;
       }
       if (res.lifetime) setServerLifetime(res.lifetime);
+      if (res.daily) {
+        run.daily = res.daily;
+        game.daily = res.daily.state;
+        renderDaily();
+      }
+      boards.invalidate();
+      // The server's score and run id make the share link verifiable.
+      if (res.score) {
+        run.score = res.score;
+        run.verifiedRunId = run.runId;
+      }
       saveProfile();
     }
     const mismatch = res.verdicts.some((v, i) => v !== run.verdicts[i]);
@@ -1119,7 +1181,7 @@ function renderResults(run, result, best, before, verification) {
   }
 
   // The link replays these exact rings for a friend: same seed, speed and ring looks.
-  const code = encodeChallenge({ seed: run.seed, base: run.base, block: run.looks, hits: run.score.hits, avgUs: run.score.avgUs });
+  const code = encodeChallenge({ seed: run.seed, base: run.base, block: run.looks, hits: run.score.hits, avgUs: run.score.avgUs, runId: run.verifiedRunId ?? null });
   const shareBase = document.querySelector('meta[name="omt-share-url"]')?.content || location.origin + location.pathname;
   $('share').dataset.text = `I hit ${scoreText(run.score)} in One More Tap. Beat my exact rings: ${shareBase}#${code}`;
   $('share-text').textContent = '';
@@ -1159,6 +1221,148 @@ function renderChallengeCard() {
   $('challenge-card').hidden = !c;
   if (!c) return;
   $('challenge-text').textContent = `A friend hit ${scoreText(c)}. Play their exact rings and beat it.`;
+}
+
+// ============================================================ Title: age gate, challenge results, prizes (online)
+
+function renderAgeCard() {
+  // Asked once, neutrally, after the player's first run, never before they can play.
+  const played = (lifetime().rankedRuns ?? 0) > 0 || game.run !== null;
+  $('age-card').hidden = !game.online || game.player.ageGateAnswered || !played;
+}
+
+function buildYearOptions() {
+  const select = $('age-year');
+  const now = new Date().getFullYear();
+  for (let y = now; y >= now - 100; y--) select.add(new Option(String(y), String(y)));
+}
+
+async function submitAgeGate(e) {
+  e.preventDefault();
+  const birthYear = Number($('age-year').value);
+  if (!birthYear) return;
+  try {
+    const res = await api.request('POST', '/v1/account/age-gate', { birthYear });
+    store.set('ageGateAnswered', true);
+    store.set('isMinor', res.isMinor);
+    game.player.ageGateAnswered = true;
+    renderAgeCard();
+    // New session claims carry the answer (telemetry and ads read them).
+    await api.login().catch(() => {});
+  } catch (err) {
+    $('connection').textContent = `Couldn't save that (${err.code ?? 'network_error'}).`;
+  }
+}
+
+/** Results of friends playing your challenge links, newest first; dismissed ones stay hidden. */
+async function loadInbox() {
+  if (!game.online) return;
+  try {
+    const { results } = await api.request('GET', '/v1/challenges');
+    const seen = store.get('inboxSeen', '');
+    const fresh = results.filter((r) => r.at > seen).slice(0, 3);
+    const list = $('inbox-list');
+    list.textContent = '';
+    for (const r of fresh) {
+      const li = document.createElement('li');
+      li.dataset.outcome = r.outcome;
+      const verb = r.outcome === 'win' ? 'You beat' : r.outcome === 'lose' ? 'You lost to' : 'Dead heat with';
+      li.textContent = `${verb} ${r.name}: your ${scoreText(r.mine)} vs ${scoreText(r.theirs)}`;
+      list.append(li);
+    }
+    $('inbox-card').hidden = fresh.length === 0;
+    $('inbox-dismiss').dataset.latest = results[0]?.at ?? '';
+  } catch {
+    $('inbox-card').hidden = true;
+  }
+}
+
+const money = (cents, currency) => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
+
+/** A prize waiting for verification (only when the server has prizes switched on). */
+async function loadPrizes() {
+  if (!game.online) return;
+  try {
+    const p = await api.request('GET', '/v1/prizes');
+    const due = p.enabled ? p.payouts.find((x) => x.status === 'AWAITING_VERIFICATION') : null;
+    $('prize-card').hidden = !due;
+    if (!due) return;
+    const by = new Date(due.claimDeadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    $('prize-text').textContent = `You placed #${due.rank} in season ${due.season} and won ${money(due.amountCents, due.currency)}. Verify your identity by ${by} to claim it.`;
+    const verify = $('prize-verify');
+    verify.hidden = !p.verifyUrl;
+    if (p.verifyUrl) verify.href = `${p.verifyUrl}${p.verifyUrl.includes('?') ? '&' : '?'}reference=${encodeURIComponent(due.id)}`;
+    $('prize-rules').hidden = !p.rulesUrl;
+    if (p.rulesUrl) $('prize-rules').href = p.rulesUrl;
+  } catch {
+    $('prize-card').hidden = true;
+  }
+}
+
+function renderTitleCards() {
+  renderAgeCard();
+  loadInbox();
+  loadPrizes();
+}
+
+// ============================================================ Leaderboards
+
+const boards = createBoards({
+  api,
+  store,
+  $,
+  me: () => ({
+    online: game.online,
+    name: game.player.name,
+    region: game.player.region,
+    lifetime: lifetime(),
+    prestige: game.profile.prestige,
+    rating: game.profile.rating,
+    season: currentSeason(game.season),
+  }),
+  async onRegion(region) {
+    if (!game.online) {
+      game.player.region = region;
+      store.set('region', region);
+      boards.publishShared();
+      return null;
+    }
+    try {
+      applyPlayer(await api.request('PATCH', '/v1/profile', { region }));
+      return null;
+    } catch (e) {
+      if (e.code === 'region_cooldown') return `You can change region once a week. ${regionUnlockText()}`;
+      return `Couldn't change region (${e.code ?? 'network_error'}).`;
+    }
+  },
+  async onReroll() {
+    if (!game.online) {
+      store.set('handle', null);
+      game.player.name = localHandle();
+      boards.publishShared();
+      return null;
+    }
+    try {
+      applyPlayer(await api.request('PATCH', '/v1/profile', { rerollName: true }));
+      return null;
+    } catch (e) {
+      return e.code === 'reroll_limit' ? 'That’s enough new names for today.' : `Couldn't change name (${e.code ?? 'network_error'}).`;
+    }
+  },
+});
+
+function regionUnlockText() {
+  const until = game.player.regionLockedUntil;
+  return until ? `Next change: ${new Date(until).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
+}
+
+function applyPlayer(p) {
+  game.player = { name: p.displayName, region: p.region, regionLockedUntil: p.regionLockedUntil, ageGateAnswered: p.ageGateAnswered };
+}
+
+function openBoard() {
+  setScreen('board-screen');
+  boards.open();
 }
 
 // ============================================================ Unlocks menu
@@ -1295,9 +1499,17 @@ $('challenge-dismiss').addEventListener('click', () => {
   renderChallengeCard();
 });
 $('menu').addEventListener('click', () => {
-  game.run = null;
   renderProfile();
   setScreen('title-screen');
+  renderTitleCards();
+  game.run = null;
+});
+$('open-board').addEventListener('click', () => openBoard());
+$('board-close').addEventListener('click', () => setScreen('title-screen'));
+$('age-card').addEventListener('submit', submitAgeGate);
+$('inbox-dismiss').addEventListener('click', (e) => {
+  store.set('inboxSeen', e.currentTarget.dataset.latest ?? '');
+  $('inbox-card').hidden = true;
 });
 $('ad-continue').addEventListener('click', () => continueAfterAd());
 $('ad-end').addEventListener('click', () => endRun());
@@ -1366,14 +1578,39 @@ async function connect() {
     };
     game.webAdRewards = profile.webAdRewards ?? 'none';
     if (profile.lifetime) setServerLifetime(profile.lifetime);
+    if (profile.daily) game.daily = profile.daily;
+    if (profile.player) {
+      applyPlayer(profile.player);
+      await syncPlayer(profile.player);
+    }
     store.set('prestige', profile.prestige);
     if (game.equipped > profile.prestige) equip(profile.prestige);
     game.online = true;
     renderProfile();
+    renderDaily();
+    renderTitleCards();
     status.className = 'connection online';
     status.textContent = `Online. Runs are re-simulated and scored by the server (clock offset ${Math.round(api.offsetMs)} ms).`;
   } catch (e) {
     status.textContent = `Server found but login failed (${e.code ?? e.message}). Playing offline.`;
+  }
+}
+
+/** Tells the server this device's time zone (the day streak counts its days) and, once, its likely region. */
+async function syncPlayer(p) {
+  const patch = {};
+  const tz = deviceTimeZone();
+  if (tz && tz !== p.timeZone) patch.timeZone = tz;
+  if (p.region === null && !store.get('regionAsked', false)) {
+    const guess = regionForTimeZone(tz);
+    if (guess) patch.region = guess;
+    store.set('regionAsked', true);
+  }
+  if (Object.keys(patch).length === 0) return;
+  try {
+    applyPlayer(await api.request('PATCH', '/v1/profile', patch));
+  } catch {
+    // Not worth bothering the player: the streak falls back to UTC days and the region can be picked by hand.
   }
 }
 
@@ -1396,6 +1633,7 @@ resize();
 renderProfile();
 renderDaily();
 renderChallengeCard();
+buildYearOptions();
 if (game.equipped > game.profile.prestige) game.equipped = 0;
 bgLevel = game.equipped;
 loadAdNetwork();

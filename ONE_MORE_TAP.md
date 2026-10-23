@@ -54,13 +54,32 @@ Online they come from the server and count only server-verified runs. Offline th
 (labelled THIS DEVICE) and never merge into the server totals. Slow-Mo rings never count, because tickets can be
 bought.
 
-**Daily streak** (Ranked runs; stored on the device): play every day to grow it. Every 7th day in a row earns an
-Anchor (max 2). An Anchor covers one missed day. The title screen shows the last 7 days and whether today is done.
+**Daily streak** (Ranked runs): play every day to grow it. Every 7th day in a row earns an Anchor (max 2). An
+Anchor covers one missed day. Online, the server keeps the streak from verified Ranked runs and counts days in the
+player's time zone. Offline it lives on the device. The title screen shows the last 7 days.
 
-**Challenge links:** after a run, CHALLENGE A FRIEND shares a link (`#c-seed-base-block-hits-avgUs`). The link replays
-your exact rings: same seed, speed and ring types, 5 lives, no Slow-Mo, no ad refill. More hits wins; equal hits go
-to the lower average. Online, the challenge is a server-verified DUEL run. For an offline single-file build,
-`node Web/build-artifact.mjs <out.html> <public page URL>` puts that URL in shared links.
+**Challenge links:** after a run, CHALLENGE A FRIEND shares a link (`#c-seed-base-block-hits-avgUs[-runId]`). The
+link replays your exact rings: same seed, speed and ring types, 5 lives, no Slow-Mo, no ad refill. More hits wins;
+equal hits go to the lower average. Online, the link carries the verified run id: the server checks the replay
+matches and supplies the challenger's real score (the numbers in a link can be edited), and the challenger sees
+the result on their title screen. Links without a run id (offline runs) still play as plain challenges. For an
+offline single-file build, `node Web/build-artifact.mjs <out.html> <public page URL>` puts that URL in shared links.
+
+**Leaderboards** (title screen → LEADERBOARDS): Season (this calendar month, UTC), Lifetime, Prestige and Precision,
+each for Global or one region: North America, South America, Europe, Africa, Middle East, Asia, Oceania. Points are
+PERFECT 2, CLEAN 1.5, SO CLOSE 1 from verified Ranked runs; Slow-Mo rings never count; tied scores share a rank.
+- Names are generated ("Swift Comet 4821") and rerolled, never typed, so boards need no moderation and show no
+  personal data.
+- The region is guessed from the device time zone (nothing is looked up) and can be corrected once straight away;
+  after that it can change once a week, so nobody hops to a quieter board.
+- Boards are Redis sorted sets rebuilt from Postgres when Redis has none and every 6 hours
+  (`npm run season -- boards-rebuild` forces it).
+- In the published single-file build (claude.ai artifact) there is no server: the page uses the artifact's shared
+  storage as a test board. Each tester's device reports its own scores, so the page labels them unverified.
+
+**Age gate:** after the first run, online players are asked their birth year once (neutral, no hints). Under-13s
+are minors (COPPA): no personalised ads, minimal telemetry. 18+ is recorded for prize eligibility (verified again
+with ID before any payout). Until answered, ads are requested non-personalised.
 
 **Slow-Mo** rings run at 0.4x and are scored in game time, so every verdict window is 2.5x wider in real time.
 Slow-Mo rings never count toward your best tap or Precision rating, because tickets can be bought.
@@ -73,9 +92,10 @@ by the server's cool-down and daily cap. In development the dev simulator is use
 ## Load time
 
 `Web/` is plain ES modules with no framework or build step: `core`, `store`, `api`, `progress`, `backgrounds`,
-`music`, `game`. They're modulepreloaded and gzipped by the server (about 30 KB of JS over the wire). Fonts load
-after the first frame and never block play. Measured cold, with no cache, on a throttled phone profile (1.6 Mbps,
-150 ms RTT, 4x CPU slowdown): title interactive in about 0.7 s, first ring on screen about 2.1 s after tapping play.
+`music`, `social`, `board`, `game`. They're modulepreloaded and gzipped by the server (about 40 KB of JS over the
+wire). Fonts load after the first frame and never block play. Measured cold, with no cache, on a throttled phone
+profile (1.6 Mbps, 150 ms RTT, 4x CPU slowdown): title interactive in about 0.9 s, first ring on screen about 2.2 s
+after tapping play.
 The budget is 8 s.
 
 ## Tests
@@ -87,7 +107,9 @@ cd Backend && npm test
 - Ring-schedule golden vectors (TypeScript ≡ C# ≡ web).
 - Verdict windows, bot and reaction-floor flags, slow-mo in game time, rewarded-ad resumes.
 - Prestige circles and rating: web client ≡ server.
-- Daily streak and Anchors, challenge codes, ring types, music intensity.
+- Daily streak and Anchors (web ≡ server, including time-zone changes), challenge codes, ring types, music intensity.
+- Prize pool split: proportional, cap, minimum, ties, rounding to the cent.
+- Regions from time zones, generated names (web ≡ server), age-gate flags, challenge scoring.
 - Web client verdicts versus server re-simulation.
 - Unity `RunSession` versus server re-simulation. Needs `mcs` and `mono`; the test is skipped when they're absent.
 
@@ -123,8 +145,37 @@ Optional SDKs compile only when their scripting define is set:
 - **Slow-Mo** is a dedicated button, not the GDD's long-press. Taps fire on press-down, so every long-press would
   also have been a tap.
 - **Offline runs** are practice only. They're never rewarded, because the server must issue the run seed.
-- **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes. It has no Prestige, backgrounds, ring types, streaks or challenges. The web build is
+- **Unity client:** still has the earlier Pulse/Gauntlet/Zen modes. It has no Prestige, backgrounds, ring types,
+  streaks, challenges, leaderboards or prizes. Its age gate still sends minor/adult only, so Unity players are never
+  marked 18+ (no prize eligibility) until it asks for a birth year. The web build is
   the lead client for now. The server keeps the older modes so the Unity build still works.
+
+## Monthly skill-prize seasons (Option B: cash prizes, no token)
+
+Off by default (`PRIZES_ENABLED=false`). Each calendar month is a season. After it ends, the operator puts a share of
+that month's ad revenue into a pool and splits it by season points:
+- **Proportional, with a cap and a minimum.** Each winner gets pool × their points / winners' points. Nobody gets
+  more than the cap (default 5% of the pool); shares under the minimum payout (default $5) aren't paid, and that
+  money goes to the other winners. Tied players are always treated alike. Unit-tested in `test/prizes.test.ts`.
+- **Eligible:** 18+ (self-declared at the age gate, then verified with ID), not a minor, account active, at least
+  10 verified Ranked runs in the month, and no quarantined or rejected Ranked run that month (manual review).
+- **Paid only after verification:** identity, age and country (`PRIZE_COUNTRIES`), one payout per real person per
+  season. Unverified prizes expire after 90 days. Forfeited, expired and unallocated money rolls into the next pool.
+- **Fixed once awarded:** database triggers refuse changes to a season, or to who won, their rank or amount.
+
+```bash
+cd Backend && npm run build
+npm run season -- preview 2026-10 50000          # $500 pool: DRAFT snapshot + the split, for review
+npm run season -- review  2026-10                # top earners: devices, account age, PERFECT share, avg delta
+npm run season -- award   2026-10 50000          # freeze and write the payouts (same terms as the preview)
+npm run season -- verify  <payoutId> <identityRef> <country> <age> pass|fail   # from the identity provider
+npm run season -- export  2026-10 > payouts.csv  # VERIFIED payouts for the payout provider's batch upload
+npm run season -- paid    <batchId> <payoutId>...
+npm run season -- rollover 2026-10               # cents to add to the next pool
+```
+
+Before switching it on: official rules reviewed by a lawyer (`PRIZE_RULES_URL`), an identity-verification provider
+wired to `verifyPayout()` (`PRIZE_VERIFY_URL` is its hosted flow), and a payout provider account.
 
 ## Airdrop snapshot rails (future; nothing is distributed today)
 
@@ -140,7 +191,7 @@ npm run airdrop -- export genesis > genesis.csv                     # user_id,po
 ```
 
 - **Points:** PERFECT 4, CLEAN 3, CLOSE 2 by default (the Prestige ratio). They're configurable per snapshot.
-- **Excluded, with the reason recorded:** minors (and any account that hasn't passed the age gate), pending
+- **Excluded, with the reason recorded:** minors, players not 18+ at the age gate (or who never answered), pending
   deletion, non-active accounts, any quarantined or rejected Ranked run before the cutoff (manual review), and fewer
   than the minimum verified runs.
 - **Frozen:** database triggers refuse any change to a FINAL snapshot and any update to an entry. Account erasure

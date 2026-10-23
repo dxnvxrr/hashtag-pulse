@@ -54,11 +54,16 @@ test('daily streak: day math crosses months, years and DST', () => {
 });
 
 test('challenge codes round-trip and reject garbage', () => {
-  const c = { seed: 4294967295, base: 1900, block: 3, hits: 42, avgUs: 11250 };
+  const c = { seed: 4294967295, base: 1900, block: 3, hits: 42, avgUs: 11250, runId: null };
   const code = progress.encodeChallenge(c);
   assert.match(code, /^[A-Za-z0-9-]+$/);
   assert.deepEqual(progress.decodeChallenge(`#${code}`), c);
   assert.deepEqual(progress.decodeChallenge(`#${code}-debug`), c, 'a trailing tag is ignored');
+  // With the verified run id (dashes stripped in the link, restored on decode).
+  const v = { ...c, runId: '0f8b2c4e-1a2b-4c3d-9e8f-0123456789ab' };
+  const vcode = progress.encodeChallenge(v);
+  assert.equal(vcode, `${code}-0f8b2c4e1a2b4c3d9e8f0123456789ab`);
+  assert.deepEqual(progress.decodeChallenge(`#${vcode}-debug`), v);
   for (const bad of ['', '#debug', '#c-1-2-3', '#c-99999999999-1900-0-1-1', '#c-1-700-0-1-1', '#c-1-1900-11-1-1', '#c-x-1900-0-1-1']) {
     assert.equal(progress.decodeChallenge(bad), null, bad);
   }

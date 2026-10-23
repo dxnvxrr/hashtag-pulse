@@ -32,9 +32,10 @@ export function emptyStreak() {
 export function recordPlay(state, today) {
   const s = { ...emptyStreak(), ...state, played: [...(state?.played ?? [])] };
   const result = { state: s, event: 'same-day', anchorsUsed: 0, anchorEarned: false };
-  if (s.last === today) return result;
-
   const gap = s.last === null ? Infinity : daysBetween(s.last, today);
+  // Same day, or a day key that moved backwards (time-zone change, clock fix): nothing to record.
+  if (gap <= 0) return result;
+
   if (gap === 1) {
     s.streak += 1;
     result.event = 'continued';
@@ -61,26 +62,30 @@ export function recordPlay(state, today) {
 export function streakStatus(state, today) {
   if (!state?.last) return 'none';
   const gap = daysBetween(state.last, today);
-  if (gap === 0) return 'done';
+  if (gap <= 0) return 'done';
   if (gap === 1) return 'due';
   return gap - 1 <= state.anchors ? 'anchored' : 'lost';
 }
 
 // ---------------------------------------------------------------- Challenge links
-// Format: c-<seed>-<baseMs>-<ringBlock>-<hits>-<avgDeltaUs>. Only letters, digits and '-', so it survives any
-// share path (artifact links keep plain #anchors only).
+// Format: c-<seed>-<baseMs>-<ringBlock>-<hits>-<avgDeltaUs>[-<runId as 32 hex>]. Only letters, digits and '-', so it
+// survives any share path (artifact links keep plain #anchors only). The run id lets the server replay the exact
+// run and supply the challenger's verified score; links without it still work.
 
 export function encodeChallenge(c) {
-  return `c-${c.seed}-${c.base}-${c.block}-${c.hits}-${c.avgUs}`;
+  const base = `c-${c.seed}-${c.base}-${c.block}-${c.hits}-${c.avgUs}`;
+  return c.runId ? `${base}-${c.runId.replace(/-/g, '')}` : base;
 }
 
 /** Returns null for anything that isn't a well-formed challenge. */
 export function decodeChallenge(text) {
-  const m = /^#?c-(\d{1,10})-(\d{3,4})-(\d{1,2})-(\d{1,3})-(\d{1,6})(?:-|$)/.exec(text ?? '');
+  const m = /^#?c-(\d{1,10})-(\d{3,4})-(\d{1,2})-(\d{1,3})-(\d{1,6})(?:-([0-9a-f]{32}))?(?:-|$)/.exec(text ?? '');
   if (!m) return null;
-  const [seed, base, block, hits, avgUs] = m.slice(1).map(Number);
+  const [seed, base, block, hits, avgUs] = m.slice(1, 6).map(Number);
   if (seed > 0xffffffff || base < 800 || base > 2500 || block > 10) return null;
-  return { seed, base, block, hits, avgUs };
+  const h = m[6];
+  const runId = h ? `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}` : null;
+  return { seed, base, block, hits, avgUs, runId };
 }
 
 /** Challenge result: more hits wins; equal hits, the lower average delta wins. */

@@ -17,6 +17,8 @@
 <link rel="modulepreload" href="progress.js">
 <link rel="modulepreload" href="backgrounds.js">
 <link rel="modulepreload" href="music.js">
+<link rel="modulepreload" href="social.js">
+<link rel="modulepreload" href="board.js">
 </head>
 <body>
 <!--ARTIFACT-BODY-START-->
@@ -72,6 +74,28 @@
           <button id="challenge-dismiss" class="hud-btn" type="button">NOT NOW</button>
         </div>
       </section>
+      <section id="prize-card" class="challenge-card" hidden aria-labelledby="prize-title">
+        <p id="prize-title" class="eyebrow">SEASON PRIZE</p>
+        <p id="prize-text" class="challenge-text"></p>
+        <div class="challenge-actions">
+          <a id="prize-verify" class="primary link-button" target="_blank" rel="noopener">VERIFY TO CLAIM</a>
+          <a id="prize-rules" class="hud-btn link-button" target="_blank" rel="noopener">RULES</a>
+        </div>
+      </section>
+      <section id="inbox-card" class="inbox-card" hidden aria-labelledby="inbox-title">
+        <div class="inbox-head">
+          <p id="inbox-title" class="eyebrow">CHALLENGE RESULTS</p>
+          <button id="inbox-dismiss" class="hud-btn" type="button">OK</button>
+        </div>
+        <ul id="inbox-list" class="inbox-list"></ul>
+      </section>
+      <form id="age-card" class="age-card" hidden>
+        <label for="age-year" class="age-label">What year were you born?</label>
+        <div class="age-row">
+          <select id="age-year" required><option value="">Year</option></select>
+          <button class="hud-btn" type="submit">SAVE</button>
+        </div>
+      </form>
       <div id="daily" class="daily">
         <div id="daily-days" class="daily-days" aria-hidden="true"></div>
         <p id="daily-text" class="small"></p>
@@ -81,7 +105,10 @@
         <button type="button" class="mode" role="radio" aria-checked="false" data-mode="ZEN">ZEN<small>no lives, no stakes</small></button>
       </div>
       <button id="start" class="primary" type="button">PLAY</button>
-      <button id="open-unlocks" class="secondary" type="button">UNLOCKS &amp; SOUND</button>
+      <div class="title-actions">
+        <button id="open-board" class="secondary" type="button">LEADERBOARDS</button>
+        <button id="open-unlocks" class="secondary" type="button">UNLOCKS &amp; SOUND</button>
+      </div>
       <p id="connection" class="connection">Checking for game server…</p>
     </div>
   </section>
@@ -122,6 +149,36 @@
       </div>
       <p class="eyebrow" id="equipped-label">EQUIPPED · DEFAULT</p>
       <ol id="unlock-grid" class="unlock-grid" aria-label="Backgrounds"></ol>
+    </div>
+  </section>
+
+ <section id="board-screen" class="screen screen-glass" hidden aria-labelledby="board-title">
+    <div class="unlocks board">
+      <header class="unlocks-head">
+        <div>
+          <p id="board-eyebrow" class="eyebrow">SEASON</p>
+          <h2 id="board-title" class="screen-title">Leaderboards</h2>
+        </div>
+        <button id="board-close" class="hud-btn" type="button">DONE</button>
+      </header>
+      <div class="board-tabs" role="radiogroup" aria-label="Leaderboard">
+        <button type="button" role="radio" data-board="season">SEASON</button>
+        <button type="button" role="radio" data-board="lifetime">LIFETIME</button>
+        <button type="button" role="radio" data-board="prestige">PRESTIGE</button>
+        <button type="button" role="radio" data-board="precision">PRECISION</button>
+      </div>
+      <div id="board-regions" class="board-regions" role="radiogroup" aria-label="Region"></div>
+      <p id="board-status" class="small" aria-live="polite"></p>
+      <ol id="board-list" class="board-list" aria-label="Rankings"></ol>
+      <div id="board-me" class="board-row board-me" hidden></div>
+      <p id="board-note" class="small"></p>
+      <div class="settings board-you">
+        <p class="setting-label">You play as <span id="board-name" class="mono">—</span></p>
+        <button id="board-reroll" class="hud-btn" type="button">NEW NAME</button>
+        <label for="board-region" class="setting-label">Your region</label>
+        <select id="board-region"></select>
+        <p id="board-region-note" class="setting-note"></p>
+      </div>
     </div>
   </section>
 

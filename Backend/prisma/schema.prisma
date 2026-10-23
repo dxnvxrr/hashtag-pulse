@@ -58,6 +58,16 @@ enum PurchaseStatus {
   REFUNDED
 }
 
+enum Region {
+  NA
+  SA
+  EU
+  AF
+  ME
+  AS
+  OC
+}
+
 enum RunMode {
   RANKED
   PULSE
@@ -93,6 +103,15 @@ model User {
   isMinor         Boolean    @default(false)
   /// Set once the player answers the age gate; afterwards isMinor can only become stricter.
   ageGateAnsweredAt DateTime?
+  /// Self-declared 18+ at the age gate (never set for minors). Prize payouts still verify age with ID.
+  isAdult         Boolean    @default(false)
+  /// Generated leaderboard name ("Swift Comet 4821"); players reroll it, never type it.
+  displayName     String?
+  /// Leaderboard region, self-selected (defaulted from the device time zone). Null = global boards only.
+  region          Region?
+  regionChangedAt DateTime?
+  /// IANA time zone the daily streak counts days in.
+  timeZone        String?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   deletionRequestedAt DateTime?
@@ -108,6 +127,7 @@ model User {
   auditLogs     AuditLog[]
   stats         PlayerStats?
   airdropEntries AirdropEntry[]
+  prizePayouts  PrizePayout[]
 
   @@map("users")
 }
@@ -244,6 +264,11 @@ model Run {
   statPerfects Int       @default(0)
   statCleans   Int       @default(0)
   statCloses   Int       @default(0)
+  /// Challenge score: hits and average |delta| within the first 5 lives (what challenge links compare).
+  scoreHits    Int?
+  scoreAvgUs   Int?
+  /// DUEL runs started from a challenge link: the challenger's run.
+  challengeRunId String?  @db.Uuid
   flags        String[]
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -251,6 +276,7 @@ model Run {
   @@index([userId, startedAt])
   @@index([status])
   @@index([mode, status, submittedAt])
+  @@index([challengeRunId])
   @@map("runs")
 }
 
@@ -315,6 +341,12 @@ model PlayerStats {
   cleans     Int      @default(0)
   closes     Int      @default(0)
   rankedRuns Int      @default(0)
+  /// Daily streak (verified Ranked runs, counted in the player's time zone). Days are YYYY-MM-DD.
+  dailyLast   String?
+  dailyStreak Int      @default(0)
+  dailyBest   Int      @default(0)
+  anchors     Int      @default(0)
+  dailyPlayed String[]
   updatedAt  DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -333,7 +365,8 @@ enum SnapshotStatus {
 model AirdropSnapshot {
   id            String         @id @default(uuid()) @db.Uuid
   label         String         @unique
-  /// Only runs submitted before this instant count.
+  /// Only runs submitted in [fromAt, cutoffAt) count; fromAt null = from the beginning.
+  fromAt        DateTime?
   cutoffAt      DateTime
   status        SnapshotStatus @default(DRAFT)
   weightPerfect Int
@@ -348,6 +381,7 @@ model AirdropSnapshot {
   finalizedAt   DateTime?
 
   entries AirdropEntry[]
+  season  PrizeSeason?
 
   @@map("airdrop_snapshots")
 }
@@ -361,7 +395,8 @@ model AirdropEntry {
   rankedRuns     Int
   points         BigInt
   eligible       Boolean
-  /// Why an ineligible player was left out: minor, account_status, deletion_pending, anticheat_review, too_few_runs.
+  /// Why an ineligible player was left out: minor, not_adult, deletion_pending, account_status, anticheat_review,
+  /// too_few_runs.
   excludedReason String?
 
   snapshot AirdropSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
@@ -370,4 +405,68 @@ model AirdropEntry {
   @@id([snapshotId, userId])
   @@index([snapshotId, eligible])
   @@map("airdrop_entries")
+}
+
+enum PayoutStatus {
+  /// Won; the player must verify identity, age (18+) and country before the deadline.
+  AWAITING_VERIFICATION
+  VERIFIED
+  PAID
+  /// Failed verification (under 18, excluded country, duplicate person) or broke the rules.
+  FORFEITED
+  /// Not verified before the deadline.
+  EXPIRED
+}
+
+/// A monthly skill-prize season: a pool (a share of that month's ad revenue) split by season points.
+/// Created only when the operator closes the month (src/cli/season.ts), from a finalised snapshot.
+model PrizeSeason {
+  id             String         @id @default(uuid()) @db.Uuid
+  /// The season id, "2026-10".
+  label          String         @unique
+  snapshotId     String         @unique @db.Uuid
+  poolCents      Int
+  currency       String         @default("USD")
+  /// Most one player can win, in basis points of the pool (500 = 5%).
+  capBps         Int
+  /// Shares smaller than this are not paid out (fees would eat them); that money goes to the other winners.
+  minPayoutCents Int
+  /// Pool money nobody received (everyone capped). Roll it into the next pool.
+  unallocatedCents Int
+  claimDeadline  DateTime
+  createdAt      DateTime       @default(now())
+
+  snapshot AirdropSnapshot @relation(fields: [snapshotId], references: [id])
+  payouts  PrizePayout[]
+
+  @@map("prize_seasons")
+}
+
+model PrizePayout {
+  id           String       @id @default(uuid()) @db.Uuid
+  seasonId     String       @db.Uuid
+  userId       String       @db.Uuid
+  rank         Int
+  halfPoints   BigInt
+  amountCents  Int
+  status       PayoutStatus @default(AWAITING_VERIFICATION)
+  /// Opaque reference from the identity-verification provider: one payout per real person per season.
+  identityRef  String?
+  /// ISO 3166-1 alpha-2, from verification.
+  country      String?
+  statusReason String?
+  verifiedAt   DateTime?
+  paidAt       DateTime?
+  /// The payout provider's batch or transfer id.
+  providerRef  String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  season PrizeSeason @relation(fields: [seasonId], references: [id], onDelete: Restrict)
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, userId])
+  @@unique([seasonId, identityRef])
+  @@index([status])
+  @@map("prize_payouts")
 }

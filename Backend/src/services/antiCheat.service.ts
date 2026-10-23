@@ -10,7 +10,9 @@ import { getSession } from './auth.service.js';
 import { baseDurationForRating, generateSchedule } from './ringSchedule.js';
 import { applyPrestige, nextRating, toGameTimeUs, windowRealUs, type RingOutcome } from './progression.js';
 import { applyLedgerEntries, toWalletView, type LedgerEntry, type WalletView } from './wallet.service.js';
-import { addRankedRun, statCounts, type LifetimeStats } from './stats.service.js';
+import { addRankedRun, challengeScore, statCounts, type LifetimeStats } from './stats.service.js';
+import { halfPoints, recordRankedRun } from './leaderboard.service.js';
+import type { StreakResult } from './streak.js';
 
 // ============================================================ Request signing
 
@@ -67,6 +69,8 @@ export interface RunStartResult {
   ftue: boolean;
   maxRings: number;
   maxMisses: number;
+  /** DUEL from a challenge link: the challenger's server-verified score (links can be edited; this can't). */
+  challenge: { hits: number; avgUs: number } | null;
   /** Server epoch ms at which ring 0 spawns. */
   ring0ServerTimeMs: number;
   serverTimeMs: number;
@@ -100,7 +104,13 @@ export function gauntletSeed(day = utcDay()): number {
 }
 
 /** `duelSeed`/`duelBaseMs`: a challenge replays the friend's exact rings (their seed and ring speed). */
-export async function startRun(userId: string, mode: RunMode, duelSeed?: number, duelBaseMs?: number): Promise<RunStartResult> {
+export async function startRun(
+  userId: string,
+  mode: RunMode,
+  duelSeed?: number,
+  duelBaseMs?: number,
+  challengeRunId?: string,
+): Promise<RunStartResult> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { precisionRating: true, bestDeltaUs: true, status: true } });
   if (!user) throw Errors.notFound('user_not_found');
   if (user.status !== 'ACTIVE' && user.status !== 'QUARANTINED') throw Errors.forbidden('account_inactive');
@@ -125,10 +135,27 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number,
       seed = randomUint32();
       baseDurationMs = baseDurationForRating(user.precisionRating);
   }
-  const ftue = (mode === 'PULSE' || mode === 'RANKED') && user.bestDeltaUs === null;
+  let ftue = (mode === 'PULSE' || mode === 'RANKED') && user.bestDeltaUs === null;
   if (ftue) baseDurationMs = 2_500;
 
-  const run = await prisma.run.create({ data: { userId, mode, seed: BigInt(seed), baseDurationMs, ftue } });
+  // A challenge replays a verified run exactly: same seed, speed and first-ring window.
+  let challenge: RunStartResult['challenge'] = null;
+  if (challengeRunId !== undefined) {
+    if (mode !== 'DUEL') throw Errors.badRequest('challenge_needs_duel', 'Challenges are DUEL runs');
+    const source = await prisma.run.findUnique({
+      where: { id: challengeRunId },
+      select: { status: true, seed: true, baseDurationMs: true, ftue: true, scoreHits: true, scoreAvgUs: true },
+    });
+    if (!source || source.status !== 'VALIDATED' || source.scoreHits === null || source.seed !== BigInt(seed) || source.baseDurationMs !== baseDurationMs) {
+      throw Errors.badRequest('bad_challenge', 'Challenge run not found or does not match');
+    }
+    ftue = source.ftue;
+    challenge = { hits: source.scoreHits, avgUs: source.scoreAvgUs ?? 0 };
+  }
+
+  const run = await prisma.run.create({
+    data: { userId, mode, seed: BigInt(seed), baseDurationMs, ftue, ...(challenge ? { challengeRunId } : {}) },
+  });
   const now = Date.now();
   const ring0 = now + GameRules.runLeadInMs;
 
@@ -155,6 +182,7 @@ export async function startRun(userId: string, mode: RunMode, duelSeed?: number,
     ftue,
     maxRings,
     maxMisses: livesFor(mode),
+    challenge,
     ring0ServerTimeMs: ring0,
     serverTimeMs: now,
     verdictWindowsMs: {
@@ -369,6 +397,10 @@ export interface RunSubmitResult {
   prestigeUnlocked: number[];
   /** Lifetime Ranked totals after this run; null when the run didn't change them. */
   lifetime: LifetimeStats | null;
+  /** Daily streak after this run (verified Ranked runs only); null otherwise. */
+  daily: StreakResult | null;
+  /** Hits and average |delta| within the first 5 lives (what challenge links compare). */
+  score: { hits: number; avgUs: number } | null;
   wallet: WalletView | null;
   reason?: string;
 }
@@ -437,6 +469,8 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       prestige: user.prestige,
       prestigeUnlocked: [],
       lifetime: null,
+      daily: null,
+      score: null,
       wallet: null,
       reason: ev.rejectReason ?? 'flagged_for_review',
     };
@@ -476,15 +510,17 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
   }
 
   const stats = mode === 'RANKED' ? statCounts(ev.rings) : { perfects: 0, cleans: 0, closes: 0 };
+  const score = challengeScore(ev.rings);
+  const now = new Date();
 
   try {
-    const { wallet, lifetime } = await prisma.$transaction(async (tx) => {
+    const { wallet, totals } = await prisma.$transaction(async (tx) => {
       const w = entries.length > 0 ? (await applyLedgerEntries(tx, userId, entries)).wallet : await tx.wallet.findUniqueOrThrow({ where: { userId } });
       await tx.run.update({
         where: { id: input.runId },
         data: {
           status: 'VALIDATED',
-          submittedAt: new Date(),
+          submittedAt: now,
           ringsPlayed: ev.verdicts.length,
           perfects: ev.perfects,
           cleans: ev.cleans,
@@ -496,11 +532,19 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
           statPerfects: stats.perfects,
           statCleans: stats.cleans,
           statCloses: stats.closes,
+          scoreHits: score.hits,
+          scoreAvgUs: score.avgUs,
         },
       });
       await tx.user.update({ where: { id: userId }, data: { precisionRating: rating, bestDeltaUs: newBest, prestige: prestige.level } });
-      return { wallet: w, lifetime: mode === 'RANKED' ? await addRankedRun(tx, userId, stats) : null };
+      return { wallet: w, totals: mode === 'RANKED' ? await addRankedRun(tx, userId, stats, user.timeZone, now) : null };
     });
+
+    if (totals && user.status === 'ACTIVE') {
+      const standing = { lifetimeHalf: halfPoints(totals.lifetime), prestige: prestige.level, rating };
+      // The run is committed; a Redis hiccup must not fail the submit (a rebuild restores the boards).
+      await recordRankedRun(userId, user.region, standing, halfPoints(stats), now).catch(() => undefined);
+    }
 
     if (mode === 'GAUNTLET') {
       // ZADD LT keeps each player's best attempt of the day.
@@ -520,7 +564,9 @@ export async function submitRun(userId: string, input: RunSubmitInput, ip: strin
       precisionRating: rating,
       prestige: prestige.level,
       prestigeUnlocked: prestige.unlocked,
-      lifetime,
+      lifetime: totals?.lifetime ?? null,
+      daily: totals?.daily ?? null,
+      score,
       wallet: toWalletView(wallet),
     };
   } catch (err) {

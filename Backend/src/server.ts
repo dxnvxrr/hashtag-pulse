@@ -61,7 +61,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       if (!origin) return cb(null, true);
       cb(null, allowed.has(origin));
     },
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'PATCH'],
     allowedHeaders: ['content-type', 'authorization', 'x-device-fingerprint', 'x-timestamp', 'x-nonce', 'x-signature', 'idempotency-key'],
     credentials: false,
     maxAge: 600,

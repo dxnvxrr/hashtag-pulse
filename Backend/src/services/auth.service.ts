@@ -337,15 +337,30 @@ export async function requestAccountDeletion(userId: string, sessionId: string, 
 }
 
 /**
- * COPPA age gate. The first answer is recorded as given; after that the flag may only tighten (adult -> minor),
- * so a child can't flip themselves to adult by answering again.
+ * Neutral age gate. Either a birth year (web) or a plain minor/adult answer (Unity). The first answer is recorded
+ * as given; after that both flags may only tighten, so nobody turns themselves into an adult by answering again.
+ *  - isMinor (COPPA, under 13): conservative, so anyone who might still be 12 counts as a minor.
+ *  - isAdult (18+): self-declared, for prize eligibility. Payouts verify age with ID anyway.
  */
-export async function submitAgeGate(userId: string, isMinor: boolean, ip: string): Promise<{ isMinor: boolean }> {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { isMinor: true, ageGateAnsweredAt: true } });
-  const next = user.ageGateAnsweredAt === null ? isMinor : user.isMinor || isMinor;
-  await prisma.user.update({ where: { id: userId }, data: { isMinor: next, ageGateAnsweredAt: user.ageGateAnsweredAt ?? new Date() } });
-  if (next !== user.isMinor || user.ageGateAnsweredAt === null) {
-    await audit('account.age_gate', { userId, ip, metadata: { isMinor: next } });
+export function ageFlags(birthYear: number, now = new Date()): { isMinor: boolean; isAdult: boolean } {
+  const maxAge = now.getUTCFullYear() - birthYear;
+  const isMinor = maxAge <= 13;
+  return { isMinor, isAdult: !isMinor && maxAge >= 18 };
+}
+
+export async function submitAgeGate(
+  userId: string,
+  answer: { isMinor: boolean } | { birthYear: number },
+  ip: string,
+): Promise<{ isMinor: boolean; isAdult: boolean }> {
+  const flags = 'birthYear' in answer ? ageFlags(answer.birthYear) : { isMinor: answer.isMinor, isAdult: false };
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { isMinor: true, isAdult: true, ageGateAnsweredAt: true } });
+  const first = user.ageGateAnsweredAt === null;
+  const isMinor = first ? flags.isMinor : user.isMinor || flags.isMinor;
+  const isAdult = !isMinor && (first ? flags.isAdult : user.isAdult && flags.isAdult);
+  await prisma.user.update({ where: { id: userId }, data: { isMinor, isAdult, ageGateAnsweredAt: user.ageGateAnsweredAt ?? new Date() } });
+  if (first || isMinor !== user.isMinor || isAdult !== user.isAdult) {
+    await audit('account.age_gate', { userId, ip, metadata: { isMinor, isAdult } });
   }
-  return { isMinor: next };
+  return { isMinor, isAdult };
 }

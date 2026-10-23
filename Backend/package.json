@@ -17,7 +17,8 @@
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "test": "node --import tsx --test test/*.test.ts",
-    "airdrop": "node dist/cli/airdrop.js"
+    "airdrop": "node dist/cli/airdrop.js",
+    "season": "node dist/cli/season.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",

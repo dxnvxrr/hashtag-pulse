@@ -13,6 +13,8 @@ import { audit } from '../lib/audit.js';
 
 export interface SnapshotOptions {
   label: string;
+  /** Only runs submitted in [fromAt, cutoffAt) count. Omit fromAt for all time. */
+  fromAt?: Date;
   cutoffAt: Date;
   /** Points per verdict. Default 4/3/2, the same 2 : 1.5 : 1 ratio as the Prestige circle. */
   weights?: { perfect: number; clean: number; close: number };
@@ -31,7 +33,7 @@ export async function createSnapshot(opts: SnapshotOptions) {
   return prisma.$transaction(
     async (tx) => {
       const snap = await tx.airdropSnapshot.create({
-        data: { label: opts.label, cutoffAt: opts.cutoffAt, weightPerfect: w.perfect, weightClean: w.clean, weightClose: w.close, minRankedRuns: minRuns },
+        data: { label: opts.label, fromAt: opts.fromAt ?? null, cutoffAt: opts.cutoffAt, weightPerfect: w.perfect, weightClean: w.clean, weightClose: w.close, minRankedRuns: minRuns },
       });
       // One pass over the run ledger. Exclusion order: the first matching reason is recorded.
       await tx.$executeRaw`
@@ -48,11 +50,13 @@ export async function createSnapshot(opts: SnapshotOptions) {
                  COUNT(*) FILTER (WHERE r."status" IN ('QUARANTINED', 'REJECTED'))::int AS flagged
           FROM "runs" r
           WHERE r."mode" = 'RANKED' AND r."submittedAt" < ${opts.cutoffAt}
+            AND r."submittedAt" >= ${opts.fromAt ?? new Date(0)}
           GROUP BY r."userId"
         ) s
         JOIN "users" u ON u."id" = s."userId"
         CROSS JOIN LATERAL (SELECT CASE
           WHEN u."isMinor" THEN 'minor'
+          WHEN NOT u."isAdult" THEN 'not_adult'
           WHEN u."status" = 'PENDING_DELETION' OR u."deletionRequestedAt" IS NOT NULL THEN 'deletion_pending'
           WHEN u."status" <> 'ACTIVE' THEN 'account_status'
           WHEN s.flagged > 0 THEN 'anticheat_review'

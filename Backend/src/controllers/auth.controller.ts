@@ -56,8 +56,10 @@ export async function authController(app: FastifyInstance): Promise<void> {
 
   // Returns the effective flag; the client then refreshes so new access tokens carry it.
   app.post('/v1/account/age-gate', { preHandler: requireSignedAuth }, async (req) => {
-    const body = z.object({ isMinor: z.boolean() }).parse(req.body);
-    return submitAgeGate(authOf(req).sub, body.isMinor, req.ip);
+    const body = z
+      .union([z.object({ birthYear: z.number().int().min(1900).max(new Date().getUTCFullYear()) }), z.object({ isMinor: z.boolean() })])
+      .parse(req.body);
+    return submitAgeGate(authOf(req).sub, body, req.ip);
   });
 
   app.post('/v1/account/delete', { preHandler: requireSignedAuth }, async (req, reply) => {

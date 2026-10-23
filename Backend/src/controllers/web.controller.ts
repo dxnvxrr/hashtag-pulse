@@ -17,6 +17,8 @@ const FILES: Record<string, string> = {
   'progress.js': 'text/javascript; charset=utf-8',
   'backgrounds.js': 'text/javascript; charset=utf-8',
   'music.js': 'text/javascript; charset=utf-8',
+  'social.js': 'text/javascript; charset=utf-8',
+  'board.js': 'text/javascript; charset=utf-8',
   'style.css': 'text/css; charset=utf-8',
 };
 

@@ -57,6 +57,21 @@ const EnvSchema = z.object({
   /** Google AdSense publisher id (ca-pub-…) for H5 Games Ads on the web client. Empty = house popup only. */
   WEB_AD_CLIENT: z.string().default(''),
   WEB_ADS_CLIENT_ATTESTED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+
+  /**
+   * Monthly skill-prize seasons. Off until the official rules are reviewed by a lawyer: while false, players see
+   * no prize UI and no prize data, and seasons can still be computed and reviewed from the CLI.
+   */
+  PRIZES_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  /** ISO 3166-1 alpha-2 codes where prizes may be paid, comma-separated (e.g. "US,CA,GB"). Empty = nowhere. */
+  PRIZE_COUNTRIES: z
+    .string()
+    .default('')
+    .transform((v) => v.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c))),
+  /** The identity-verification provider's hosted flow, opened from the winner's prize card. */
+  PRIZE_VERIFY_URL: z.string().url().or(z.literal('')).default(''),
+  /** Public page with the official rules (required before PRIZES_ENABLED). */
+  PRIZE_RULES_URL: z.string().url().or(z.literal('')).default(''),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
