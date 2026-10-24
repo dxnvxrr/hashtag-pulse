@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { redis, RedisKeys } from '../lib/redis.js';
 import { hmacSha256Hex, randomToken, safeEqual, sha256Hex } from '../lib/crypto.js';
 import { Errors } from '../lib/errors.js';
+import { removeFromBoards } from './leaderboard.service.js';
 import { audit } from '../lib/audit.js';
 import { applyLedgerEntries, type LedgerEntry } from './wallet.service.js';
 
@@ -334,6 +335,7 @@ export async function requestAccountDeletion(userId: string, sessionId: string, 
     await audit('account.deletion_requested', { userId, ip }, tx);
   });
   await revokeSession(sessionId);
+  await removeFromBoards(userId).catch(() => undefined); // the 6-hourly rebuild drops them anyway
 }
 
 /**

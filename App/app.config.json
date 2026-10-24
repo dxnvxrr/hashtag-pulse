@@ -1,0 +1,15 @@
+{
+  "appId": "game.onemoretap.app",
+  "appName": "One More Tap",
+  "apiUrl": "https://onemoretap.game",
+  "shareUrl": "https://onemoretap.game/play/",
+  "privacyUrl": "https://onemoretap.game/privacy",
+  "linkDomain": "onemoretap.game",
+  "admob": {
+    "testing": true,
+    "iosAppId": "ca-app-pub-3940256099942544~1458002511",
+    "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+    "iosRewarded": "ca-app-pub-3940256099942544/1712485313",
+    "androidRewarded": "ca-app-pub-3940256099942544/5224354917"
+  }
+}

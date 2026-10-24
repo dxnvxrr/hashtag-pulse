@@ -31,15 +31,20 @@ const LinkBody = z.discriminatedUnion('provider', [
 ]);
 
 export async function authController(app: FastifyInstance): Promise<void> {
-  // Stricter limit on credential endpoints than the global default.
+  // These run before the player has a token, so they're limited per IP, and mobile carriers put thousands of players
+  // behind one IP. New accounts stay tight-ish (the account-farming vector; prize payouts also verify real people).
+  // Refresh runs on every launch and its token is 256 random bits, so a generous limit costs no security.
+  const guestLimit = { config: { rateLimit: { max: 30, timeWindow: '10 seconds' } } };
+  const refreshLimit = { config: { rateLimit: { max: 200, timeWindow: '10 seconds' } } };
+  // Linking is per signed-in user (keyed by user id), so the strict limit stays.
   const authLimit = { config: { rateLimit: { max: 5, timeWindow: '10 seconds' } } };
 
-  app.post('/v1/auth/guest', authLimit, async (req) => {
+  app.post('/v1/auth/guest', guestLimit, async (req) => {
     const body = GuestBody.parse(req.body);
     return guestLogin({ ...body, ip: req.ip });
   });
 
-  app.post('/v1/auth/refresh', authLimit, async (req) => {
+  app.post('/v1/auth/refresh', refreshLimit, async (req) => {
     const body = RefreshBody.parse(req.body);
     return refreshSession({ ...body, ip: req.ip });
   });

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">One More Tap</string>
+    <string name="title_activity_main">One More Tap</string>
+    <string name="package_name">game.onemoretap.app</string>
+    <string name="custom_url_scheme">game.onemoretap.app</string>
+</resources>

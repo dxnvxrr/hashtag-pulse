@@ -86,6 +86,14 @@ export async function moveRegion(userId: string, from: Region | null, to: Region
   await m.exec();
 }
 
+/** Takes a player off every board at once (account deletion). The rebuild only keeps ACTIVE players anyway. */
+export async function removeFromBoards(userId: string, at = new Date()): Promise<void> {
+  const season = seasonId(at);
+  const m = redis.multi();
+  for (const board of BOARDS) for (const scope of ['GLOBAL', ...REGIONS] as Scope[]) m.zrem(key(board, scope, season), userId);
+  await m.exec();
+}
+
 export interface BoardEntry {
   rank: number;
   name: string;

@@ -306,3 +306,15 @@ select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .board-you select, .board-you .setting-note { grid-column: 1 / -1; }
 .board-you .setting-note:empty { display: none; }
 .board > * { flex-shrink: 0; }
+.account-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 6px; }
+.setting-link { color: var(--ring); font-size: 13px; }
+.hud-btn.danger { color: var(--miss); border-color: color-mix(in srgb, var(--miss) 50%, var(--line)); }
+.age-row .hud-btn + .hud-btn { color: var(--dim); }
+
+/* ---------- Privacy page (/privacy) */
+body.policy-page { overflow: auto; height: auto; -webkit-user-select: text; user-select: text; }
+.policy { max-width: 680px; margin: 0 auto; padding: 32px 16px 64px; line-height: 1.6; color: var(--ring); font-family: var(--font-body); }
+.policy h1 { font: 800 28px/1.15 var(--font-display); margin: 0 0 4px; }
+.policy h2 { font: 800 16px/1.3 var(--font-body); letter-spacing: 0.06em; margin: 28px 0 6px; }
+.policy p, .policy li { color: var(--dim); font-size: 15px; }
+.policy a { color: var(--gold); }

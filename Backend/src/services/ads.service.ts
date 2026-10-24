@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, verify as verifySignature } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { config, isProduction } from '../config.js';
 import { prisma } from '../lib/prisma.js';
@@ -107,6 +107,64 @@ export async function handleLevelPlayCallback(q: Record<string, string | undefin
   // LevelPlay expects "<eventId>:OK" to stop retrying; duplicates must also be acknowledged.
   if (outcome === 'granted' || outcome === 'duplicate') return `${eventId}:OK`;
   throw Errors.badRequest(`ssv_${outcome}`, `Grant ${outcome}`);
+}
+
+/**
+ * Step 2 (app) — AdMob server-side verification callback. Google signs the query string with ECDSA (SHA-256);
+ * the signature and key_id are always its last two parameters, and the signed content is everything before
+ * "&signature=". `custom_data` carries our grant id and `user_id` the player id the app set for this view.
+ */
+const ADMOB_KEYS_URL = 'https://www.gstatic.com/admob/reward/verifier-keys.json';
+const ADMOB_KEYS_TTL_MS = 24 * 60 * 60 * 1000;
+/** An unknown key id triggers a refetch (Google rotates keys), but never more often than this. */
+const ADMOB_KEYS_MIN_REFETCH_MS = 10 * 60 * 1000;
+let admobKeys: { at: number; keys: Map<string, string> } | null = null;
+
+async function loadAdMobKeys(keyId: string | null): Promise<Map<string, string>> {
+  const age = admobKeys ? Date.now() - admobKeys.at : Infinity;
+  const unknownKey = keyId !== null && admobKeys !== null && !admobKeys.keys.has(keyId);
+  if (admobKeys && age < ADMOB_KEYS_TTL_MS && !(unknownKey && age > ADMOB_KEYS_MIN_REFETCH_MS)) return admobKeys.keys;
+  let body: { keys?: Array<{ keyId: number | string; pem: string }> };
+  try {
+    const res = await fetch(ADMOB_KEYS_URL, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    body = (await res.json()) as typeof body;
+  } catch {
+    // Keep using keys we already have; otherwise answer "try later" (a 503), never a 500.
+    if (admobKeys) return admobKeys.keys;
+    throw Errors.unavailable('admob_keys_unavailable', 'Could not fetch AdMob verifier keys');
+  }
+  admobKeys = { at: Date.now(), keys: new Map((body.keys ?? []).map((k) => [String(k.keyId), k.pem])) };
+  return admobKeys.keys;
+}
+
+/** Checks the signature and returns the parsed parameters. Pure (keys passed in) for unit tests. */
+export function verifyAdMobQuery(rawQuery: string, keys: Map<string, string>): URLSearchParams {
+  const cut = rawQuery.indexOf('&signature=');
+  if (cut < 0) throw Errors.badRequest('bad_ssv', 'Missing signature');
+  const params = new URLSearchParams(rawQuery);
+  const signature = params.get('signature');
+  const keyId = params.get('key_id');
+  const pem = keyId ? keys.get(keyId) : undefined;
+  if (!signature || !pem) throw Errors.unauthorized('bad_ssv_signature');
+  const sig = Buffer.from(signature.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  const ok = verifySignature('sha256', Buffer.from(rawQuery.slice(0, cut)), { key: pem, dsaEncoding: 'der' }, sig);
+  if (!ok) throw Errors.unauthorized('bad_ssv_signature');
+  return params;
+}
+
+export async function handleAdMobCallback(rawQuery: string, ip: string): Promise<void> {
+  const params = verifyAdMobQuery(rawQuery, await loadAdMobKeys(new URLSearchParams(rawQuery).get('key_id')));
+  const grantId = params.get('custom_data');
+  const userId = params.get('user_id');
+  const eventId = params.get('transaction_id');
+  // The AdMob console's "verify URL" test call is signed but carries no grant: acknowledge it.
+  if (!grantId) return;
+  if (!userId || !eventId || !/^[0-9a-f-]{36}$/i.test(grantId)) throw Errors.badRequest('bad_ssv', 'Missing SSV parameters');
+  const reward = await prisma.adReward.findUnique({ where: { id: grantId }, select: { userId: true } });
+  if (!reward || reward.userId !== userId) throw Errors.badRequest('ssv_user_mismatch', 'Grant does not belong to user');
+  const outcome = await fulfil(grantId, `admob-${eventId}`, ip);
+  if (outcome !== 'granted' && outcome !== 'duplicate') throw Errors.badRequest(`ssv_${outcome}`, `Grant ${outcome}`);
 }
 
 /** Step 3 — client polls until the S2S callback has landed. */

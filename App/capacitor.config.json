@@ -1,0 +1,13 @@
+{
+  "appId": "game.onemoretap.app",
+  "appName": "One More Tap",
+  "webDir": "www",
+  "backgroundColor": "#06080f",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

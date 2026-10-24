@@ -19,6 +19,7 @@ export async function challengeInbox(userId: string, limit = 20) {
     JOIN "users" u ON u."id" = d."userId"
     WHERE o."userId" = ${userId}::uuid AND d."userId" <> ${userId}::uuid AND d."status" = 'VALIDATED'
       AND d."scoreHits" IS NOT NULL AND o."scoreHits" IS NOT NULL
+      AND u."deletionRequestedAt" IS NULL
     ORDER BY d."submittedAt" DESC
     LIMIT ${limit}`;
   return rows.map((r) => ({

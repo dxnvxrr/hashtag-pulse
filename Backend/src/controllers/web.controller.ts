@@ -19,8 +19,12 @@ const FILES: Record<string, string> = {
   'music.js': 'text/javascript; charset=utf-8',
   'social.js': 'text/javascript; charset=utf-8',
   'board.js': 'text/javascript; charset=utf-8',
+  'native.js': 'text/javascript; charset=utf-8',
   'style.css': 'text/css; charset=utf-8',
+  'privacy.html': 'text/html; charset=utf-8',
 };
+
+const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // Hosts Google's H5 Games Ads needs when WEB_AD_CLIENT is set (script, ad iframes, beacons, creatives).
 const AD_HOSTS = 'https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com https://*.gstatic.com https://*.googleadservices.com https://*.adtrafficquality.google';
@@ -55,6 +59,15 @@ export async function webController(app: FastifyInstance): Promise<void> {
     const hit = cache.get(name);
     if (hit) return hit;
     let raw = await readFile(resolve(root, name));
+    if (name === 'privacy.html') {
+      raw = Buffer.from(
+        raw
+          .toString('utf8')
+          .replaceAll('{{PUBLISHER}}', escapeHtml(config.PUBLISHER_NAME || 'the publisher (not configured)'))
+          .replaceAll('{{CONTACT}}', escapeHtml(config.CONTACT_EMAIL || 'not-configured@example.com'))
+          .replaceAll('{{UPDATED}}', '24 October 2026'),
+      );
+    }
     if (name === 'index.html' && ads) {
       // The client turns ads on when it finds this tag (Web/game.js loadAdNetwork).
       raw = Buffer.from(raw.toString('utf8').replace('<!--ARTIFACT-HEAD-START-->', `<meta name="omt-ad-client" content="${config.WEB_AD_CLIENT}">\n<!--ARTIFACT-HEAD-START-->`));
@@ -79,6 +92,22 @@ export async function webController(app: FastifyInstance): Promise<void> {
   };
 
   app.get('/', noLimit, async (_req, reply) => reply.redirect('/play/'));
+  app.get('/privacy', noLimit, async (req, reply) => send('privacy.html', req, reply));
+
+  // Challenge links (https://<this host>/play/#c-…) open the installed app instead of the browser.
+  if (config.APPLE_TEAM_ID && config.APPLE_BUNDLE_ID) {
+    const aasa = { applinks: { details: [{ appIDs: [`${config.APPLE_TEAM_ID}.${config.APPLE_BUNDLE_ID}`], components: [{ '/': '/play/*' }] }] } };
+    app.get('/.well-known/apple-app-site-association', noLimit, async (_req, reply) => reply.type('application/json').send(aasa));
+  }
+  if (config.ANDROID_CERT_SHA256 && config.GOOGLE_PLAY_PACKAGE_NAME) {
+    const links = [
+      {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: { namespace: 'android_app', package_name: config.GOOGLE_PLAY_PACKAGE_NAME, sha256_cert_fingerprints: [config.ANDROID_CERT_SHA256.toUpperCase()] },
+      },
+    ];
+    app.get('/.well-known/assetlinks.json', noLimit, async (_req, reply) => reply.type('application/json').send(links));
+  }
   app.get('/play', noLimit, async (_req, reply) => reply.redirect('/play/'));
   app.get('/play/', noLimit, async (req, reply) => send('index.html', req, reply));
   app.get<{ Params: { file: string } }>('/play/:file', noLimit, async (req, reply) => send(req.params.file, req, reply));

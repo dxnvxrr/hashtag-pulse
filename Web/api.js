@@ -9,6 +9,13 @@ const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/
 const randomNonce = () => b64(crypto.getRandomValues(new Uint8Array(18))).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
 const sha256Hex = async (text) => hex(await crypto.subtle.digest('SHA-256', enc.encode(text)));
 
+/**
+ * Where the API lives. Empty = the page's own server (the backend serves /play). The app build sets
+ * <meta name="omt-api" content="https://api.example.com"> because its page is loaded from the app bundle.
+ * Requests are signed over the path only, so the base never affects signatures.
+ */
+const API_BASE = (document.querySelector('meta[name="omt-api"]')?.content ?? '').replace(/\/+$/, '');
+
 export class ApiError extends Error {
   constructor(status, code, message) {
     super(message || code);
@@ -40,9 +47,12 @@ export class Api {
     if (!window.isSecureContext || !crypto.subtle) return false;
     try {
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 1500);
-      const r = await fetch('/v1/time', { signal: ctl.signal, cache: 'no-store' });
+      // Same-origin answers fast; a remote API on a cold mobile connection (the app) needs longer.
+      const timer = setTimeout(() => ctl.abort(), API_BASE ? 5000 : 1500);
+      const r = await fetch(`${API_BASE}/v1/time`, { signal: ctl.signal, cache: 'no-store' });
       clearTimeout(timer);
+      // Rate-limited means the server is there (the clock sync that follows retries).
+      if (r.status === 429) return true;
       if (!r.ok) return false;
       const j = await r.json();
       return typeof j.serverTimeMs === 'number';
@@ -116,7 +126,7 @@ export class Api {
       let status = 0;
       let json = null;
       try {
-        const r = await fetch(path, { method, headers, body: method === 'GET' ? undefined : raw, cache: 'no-store' });
+        const r = await fetch(API_BASE + path, { method, headers, body: method === 'GET' ? undefined : raw, cache: 'no-store' });
         status = r.status;
         json = await r.json().catch(() => null);
         if (r.ok) return json;

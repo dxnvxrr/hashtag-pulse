@@ -13,6 +13,7 @@
 <!--ARTIFACT-HEAD-END-->
 <link rel="modulepreload" href="core.js">
 <link rel="modulepreload" href="store.js">
+<link rel="modulepreload" href="native.js">
 <link rel="modulepreload" href="api.js">
 <link rel="modulepreload" href="progress.js">
 <link rel="modulepreload" href="backgrounds.js">
@@ -89,6 +90,13 @@
         </div>
         <ul id="inbox-list" class="inbox-list"></ul>
       </section>
+      <section id="remind-card" class="inbox-card" hidden aria-labelledby="remind-title">
+        <p id="remind-title" class="age-label">Want a reminder before your streak ends?</p>
+        <div class="age-row">
+          <button id="remind-yes" class="hud-btn" type="button">REMIND ME</button>
+          <button id="remind-no" class="hud-btn" type="button">NO THANKS</button>
+        </div>
+      </section>
       <form id="age-card" class="age-card" hidden>
         <label for="age-year" class="age-label">What year were you born?</label>
         <div class="age-row">
@@ -115,14 +123,15 @@
 
   <section id="ad-screen" class="screen screen-dim" hidden aria-labelledby="ad-title">
     <div class="ad-card" role="dialog" aria-modal="true" aria-labelledby="ad-title">
-      <p class="ad-label">SPONSORED</p>
-      <div id="ad-slot" class="ad-slot">
-        <h2 id="ad-title" class="ad-headline">Out of lives.</h2>
-        <p id="ad-body" class="ad-body">Send a friend your exact rings and see who gets closer to 0.000s.</p>
+      <h2 id="ad-title" class="ad-headline">Out of lives.</h2>
+      <p class="ad-body">Watch a short ad to refill all 5 lives and keep this run going.</p>
+      <div id="ad-slot" class="ad-slot" hidden>
+        <p class="ad-label">SPONSORED</p>
+        <p class="ad-body">Send a friend your exact rings and see who gets closer to 0.000s.</p>
+        <p id="ad-countdown" class="ad-countdown mono" aria-live="polite" hidden>5</p>
       </div>
-      <p id="ad-countdown" class="ad-countdown mono" aria-live="polite">5</p>
-      <div id="ad-actions" class="ad-actions" hidden>
-        <button id="ad-continue" class="primary" type="button">REFILL 5 LIVES · KEEP GOING</button>
+      <div class="ad-actions">
+        <button id="ad-continue" class="primary" type="button">WATCH AD · REFILL 5 LIVES</button>
         <button id="ad-end" class="secondary" type="button">END RUN</button>
       </div>
       <p id="ad-status" class="small" aria-live="polite"></p>
@@ -146,6 +155,11 @@
         <label for="opt-sfx" class="setting-label">Sound FX <span id="sfx-value" class="mono">80</span></label>
         <input id="opt-sfx" type="range" min="0" max="100" step="1" value="80">
         <label class="toggle"><input id="opt-haptics" type="checkbox" checked> Haptics</label>
+        <div class="account-row">
+          <a id="privacy-link" class="setting-link" target="_blank" rel="noopener" hidden>Privacy policy</a>
+          <button id="delete-data" class="hud-btn danger" type="button">DELETE MY DATA</button>
+        </div>
+        <p id="delete-note" class="setting-note" aria-live="polite"></p>
       </div>
       <p class="eyebrow" id="equipped-label">EQUIPPED · DEFAULT</p>
       <ol id="unlock-grid" class="unlock-grid" aria-label="Backgrounds"></ol>

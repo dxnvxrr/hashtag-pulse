@@ -47,7 +47,9 @@ const SubmitBody = z.object({
 
 export async function gameController(app: FastifyInstance): Promise<void> {
   // Unauthenticated and unsigned on purpose: the client needs server time before it can sign anything.
-  app.get('/v1/time', async () => serverTime());
+  // Keyed by IP (no token yet) and called ~4 times per launch: mobile carriers put thousands of players behind one
+  // IP, so the global 10/s would push them into offline mode at peak. It's a clock read; a high cap is safe.
+  app.get('/v1/time', { config: { rateLimit: { max: 500, timeWindow: 1000 } } }, async () => serverTime());
 
   app.post('/v1/runs/start', { preHandler: requireSignedAuth }, async (req) => {
     const body = StartBody.parse(req.body);

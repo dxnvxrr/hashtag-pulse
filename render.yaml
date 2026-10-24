@@ -1,0 +1,60 @@
+# One-click hosting on Render (https://render.com → New → Blueprint → pick this repo).
+# Creates the API (which also serves the web game at /play), Postgres and Redis. Fill the `sync: false` values in
+# the dashboard when asked. Plan names change over time: check them on the pricing page before applying.
+services:
+  - type: web
+    name: one-more-tap
+    runtime: docker
+    dockerfilePath: ./Backend/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render's load balancer is one proxy hop: without this every player shares its IP (and its rate limit).
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: one-more-tap-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: one-more-tap-redis
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: DEVICE_FINGERPRINT_PEPPER
+        generateValue: true
+      # The app's web view origins (iOS, Android) plus your website if the game is embedded elsewhere.
+      - key: CORS_ORIGINS
+        value: capacitor://localhost,https://localhost
+      - key: PUBLISHER_NAME
+        sync: false
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_BUNDLE_ID
+        sync: false
+      - key: GOOGLE_PLAY_PACKAGE_NAME
+        sync: false
+      - key: ANDROID_CERT_SHA256
+        sync: false
+      - key: PRIZES_ENABLED
+        value: "false"
+
+  - type: keyvalue
+    name: one-more-tap-redis
+    plan: starter
+    # Sessions, nonces and run state live here: never evict them.
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+  - name: one-more-tap-db
+    plan: basic-256mb
+    databaseName: onemoretap
+    user: omt

@@ -70,6 +70,12 @@ const EnvSchema = z.object({
     .transform((v) => v.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c))),
   /** The identity-verification provider's hosted flow, opened from the winner's prize card. */
   PRIZE_VERIFY_URL: z.string().url().or(z.literal('')).default(''),
+  /** Shown on /privacy: who publishes the game and where privacy requests go. Both required in production. */
+  PUBLISHER_NAME: z.string().max(120).default(''),
+  CONTACT_EMAIL: z.string().email().or(z.literal('')).default(''),
+  /** Universal links (iOS) and App Links (Android): challenge links on this domain open the installed app. */
+  APPLE_TEAM_ID: z.string().regex(/^[A-Z0-9]{10}$/).or(z.literal('')).default(''),
+  ANDROID_CERT_SHA256: z.string().regex(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/i).or(z.literal('')).default(''),
   /** Public page with the official rules (required before PRIZES_ENABLED). */
   PRIZE_RULES_URL: z.string().url().or(z.literal('')).default(''),
 });
@@ -81,6 +87,10 @@ function load(): AppConfig {
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+  // The privacy page names the publisher and a contact; app stores reject a policy without them.
+  if (parsed.data.NODE_ENV === 'production' && (!parsed.data.PUBLISHER_NAME || !parsed.data.CONTACT_EMAIL)) {
+    throw new Error('Invalid environment configuration:\n  PUBLISHER_NAME and CONTACT_EMAIL are required in production');
   }
   return parsed.data;
 }

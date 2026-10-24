@@ -1,7 +1,8 @@
 # One More Tap — production baseline
 
-Unity 6 client (`Client/`), Fastify + Prisma + Redis backend (`Backend/`), and a playable web client (`Web/`)
-that uses the same rules and the same server API.
+Fastify + Prisma + Redis backend (`Backend/`), the web client (`Web/`), and the iOS/Android app (`App/`): the
+web client in a Capacitor shell. **To ship to the App Store and Google Play, follow `STORE_LAUNCH.md`.** The Unity
+client (`Client/`) is legacy: it predates Prestige, leaderboards, streaks and challenges and is not the shipping app.
 
 ## Play it
 
@@ -84,14 +85,26 @@ with ID before any payout). Until answered, ads are requested non-personalised.
 **Slow-Mo** rings run at 0.4x and are scored in game time, so every verdict window is 2.5x wider in real time.
 Slow-Mo rings never count toward your best tap or Precision rating, because tickets can be bought.
 
-**Ads on the web:** set `WEB_AD_CLIENT=ca-pub-…` (an approved Google AdSense account with H5 Games Ads) and the
-server adds the ad tag and the CSP hosts it needs. Without it the popup is a house ad and earns nothing. Web ads send
-no server callback, so extra lives are claimed by client attestation (`WEB_ADS_CLIENT_ATTESTED=true`), still limited
-by the server's cool-down and daily cap. In development the dev simulator is used instead.
+**Ads:** one rewarded ad, offered when the 5th life is lost, once per run. Always opt-in: the player taps WATCH AD
+or END RUN (ad networks only allow rewards for ads the player chooses to watch). In the app it's AdMob; Google calls
+`/v1/ads/ssv/admob` (signature-verified) and only then does the server grant the refill. On the web, set
+`WEB_AD_CLIENT=ca-pub-…` (approved AdSense with H5 Games Ads) for rewarded placements; web rewards are client-attested
+(`WEB_ADS_CLIENT_ATTESTED=true`), still limited by the server's cool-down and daily cap. Ads are non-personalised until
+the age gate says 13+.
+
+**The app (`App/`):** `build-www.mjs` copies `Web/` and writes the API URL, share URL, privacy URL and AdMob units
+(from `app.config.json`) into the page; `configure-native.mjs` writes the store settings into the iOS/Android
+projects. In the app, `Web/native.js` adds native haptics, the share sheet, streak reminders (local notifications
+at the player's usual hour), challenge links that open the app, the Android back button, and a native copy of saved
+data (iOS can clear web storage, and the refresh token there is the player's account). In a browser it does nothing.
+
+**Privacy & deletion:** `/privacy` serves the policy (publisher and contact from `PUBLISHER_NAME` and
+`CONTACT_EMAIL`, required in production). Unlocks & Sound → Delete my data deletes the account (off the leaderboards
+at once, erased within 30 days) and everything stored on the device.
 
 ## Load time
 
-`Web/` is plain ES modules with no framework or build step: `core`, `store`, `api`, `progress`, `backgrounds`,
+`Web/` is plain ES modules with no framework or build step: `core`, `store`, `native`, `api`, `progress`, `backgrounds`,
 `music`, `social`, `board`, `game`. They're modulepreloaded and gzipped by the server (about 40 KB of JS over the
 wire). Fonts load after the first frame and never block play. Measured cold, with no cache, on a throttled phone
 profile (1.6 Mbps, 150 ms RTT, 4x CPU slowdown): title interactive in about 0.9 s, first ring on screen about 2.2 s

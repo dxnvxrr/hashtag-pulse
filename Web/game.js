@@ -27,6 +27,7 @@ import { store } from './store.js';
 import { Api, ApiError, sleep } from './api.js';
 import { halfPoints, makeHandle, regionForTimeZone, REGION_CODES, seasonId } from './social.js';
 import { createBoards } from './board.js';
+import { native } from './native.js';
 
 // ============================================================ Audio + haptics (procedural, nothing to load)
 
@@ -111,8 +112,10 @@ const fx = {
     osc.start(t);
     osc.stop(t + dur + 0.02);
   },
-  vibrate(pattern) {
-    if (this.haptics && navigator.vibrate) navigator.vibrate(pattern);
+  /** `kind` picks the native haptic in the app; `pattern` is the web fallback (Android browsers only). */
+  vibrate(pattern, kind = 'tap') {
+    if (!this.haptics) return;
+    if (!native.haptic(kind) && navigator.vibrate) navigator.vibrate(pattern);
   },
   /** `streak` raises the PERFECT chime a semitone per hit in a row, up to an octave. */
   verdict(v, streak = 0) {
@@ -121,7 +124,7 @@ const fx = {
         const f = 880 * 2 ** (Math.min(streak, 12) / 12);
         this.tone(f, 0.5, { gain: 0.22 });
         this.tone(f * 2, 0.3, { gain: 0.06 });
-        this.vibrate(18);
+        this.vibrate(18, 'perfect');
         break;
       }
       case 'CLEAN':
@@ -134,7 +137,7 @@ const fx = {
         break;
       default:
         this.tone(320, 0.32, { type: 'sawtooth', gain: 0.07, endFreq: 110 });
-        this.vibrate([30, 30, 40]);
+        this.vibrate([30, 30, 40], 'miss');
     }
   },
   spawn() {
@@ -142,12 +145,12 @@ const fx = {
   },
   milestone() {
     [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.18, { gain: 0.12, delay: i * 0.07 }));
-    this.vibrate([30, 60, 30, 60, 45]);
+    this.vibrate([30, 60, 30, 60, 45], 'big');
   },
   prestige() {
     [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => this.tone(f, 0.32, { gain: 0.13, delay: i * 0.06 }));
     this.tone(1760, 0.8, { gain: 0.05, delay: 0.38 });
-    this.vibrate([40, 50, 40, 50, 40, 50, 90]);
+    this.vibrate([40, 50, 40, 50, 40, 50, 90], 'big');
   },
 };
 
@@ -668,7 +671,6 @@ async function startRun(challenge = null) {
     ticks: 0,
     refilledLives: 0,
     adShown: false,
-    adIntent: null,
     prestige: game.profile.prestige,
     circleHalf: 0, // golden-circle fill in half-points
     unlocked: [],
@@ -881,6 +883,7 @@ function loadAdNetwork() {
 }
 
 /** Resolves true when the ad network showed an interstitial. */
+/** A Google H5 Games rewarded ad (web). Resolves true only when the player watched to the end. */
 function showNetworkAd() {
   if (!adClient || !window.adBreak) return Promise.resolve(false);
   return new Promise((resolve) => {
@@ -892,70 +895,91 @@ function showNetworkAd() {
       }
     };
     window.adBreak({
-      type: 'next',
+      type: 'reward',
       name: 'ranked_out_of_lives',
       beforeAd: () => fx.master?.gain.setValueAtTime(0, fx.ctx.currentTime),
       afterAd: () => fx.master?.gain.setValueAtTime(1, fx.ctx.currentTime),
+      // The player already chose to watch (the button), so show it straight away.
+      beforeReward: (showAdFn) => showAdFn(),
+      adViewed: () => done(true),
+      adDismissed: () => done(false),
       adBreakDone: (info) => done(info?.breakStatus === 'viewed'),
     });
-    setTimeout(() => done(false), 8000); // no fill / blocked: fall back to the house popup
+    setTimeout(() => done(false), 30_000);
   });
 }
 
+/** The fallback "ad" (offline demo, development, or no ad to show): a short sponsor card. Earns nothing. */
 async function showHousePopup(seconds = 5) {
   const cd = $('ad-countdown');
+  $('ad-slot').hidden = false;
   cd.hidden = false;
   for (let s = seconds; s > 0; s--) {
     cd.textContent = `Ad closes in ${s}s`;
     await sleep(1000);
   }
   cd.hidden = true;
+  $('ad-slot').hidden = true;
 }
 
-async function showAdPopup(resolveUs) {
+/** Whether this run can offer a refill at all: offline demo, the app (AdMob), or a server that accepts web ads. */
+function canOfferRefill(run) {
+  if (!run.online) return true;
+  return native.adsAvailable() || game.webAdRewards !== 'none';
+}
+
+/**
+ * Out of lives: the player chooses. A rewarded ad is always opt-in (ad-network policy, and it's the player's
+ * call), so the offer appears at once with no countdown. Once per run.
+ */
+function showAdPopup(resolveUs) {
   const run = game.run;
   run.adShown = true;
   run.pendingResolveUs = resolveUs;
-  $('ad-actions').hidden = true;
+  if (!canOfferRefill(run)) {
+    endRun();
+    return;
+  }
+  $('ad-slot').hidden = true;
+  $('ad-countdown').hidden = true;
   $('ad-status').textContent = '';
   $('ad-continue').disabled = false;
   setScreen('ad-screen');
-  // Ask the server for a one-time grant while the ad plays (cool-down and daily cap are enforced there).
-  run.adIntent = run.online
-    ? api.request('POST', '/v1/ads/intent', { placement: 'replay_ring', runId: run.runId }).catch((e) => ({ error: e }))
-    : null;
-  const viewed = await showNetworkAd();
-  if (!viewed) await showHousePopup();
-  if (game.run !== run || run.ended) return;
-  $('ad-actions').hidden = false;
-  // This server doesn't accept web ad rewards: the popup still shows, but there's no extra life to offer.
-  const canContinue = !run.online || game.webAdRewards !== 'none';
-  $('ad-continue').hidden = !canContinue;
-  (canContinue ? $('ad-continue') : $('ad-end')).focus();
+  $('ad-continue').focus();
 }
 
-/** Claims the grant: web ads have no server callback, so the client attests (or uses the dev simulator). */
-async function claimGrant(grantId) {
-  const path = game.webAdRewards === 'attest' ? `/v1/ads/attest/${grantId}` : `/v1/ads/dev-complete/${grantId}`;
-  await api.request('POST', path, {});
-  for (let i = 0; i < 8; i++) {
+/** Waits for the server to record the reward (AdMob's server-side callback, or the web attestation). */
+async function awaitGrant(grantId, tries) {
+  for (let i = 0; i < tries; i++) {
     if ((await api.request('GET', `/v1/ads/grant/${grantId}`)).status === 'GRANTED') return;
-    await sleep(400);
+    await sleep(500);
   }
   throw new ApiError(408, 'grant_timeout', 'Reward not confirmed');
 }
 
-async function continueAfterAd() {
+async function watchAdForLives() {
   const run = game.run;
   const status = $('ad-status');
   $('ad-continue').disabled = true;
+  status.textContent = '';
   try {
-    if (run.online) {
-      status.textContent = 'Confirming your extra life…';
-      const intent = await run.adIntent;
-      if (intent?.error) throw intent.error;
-      await claimGrant(intent.grantId);
+    if (!run.online) {
+      await showHousePopup();
+    } else {
+      // The server enforces the cool-down and daily cap and issues a one-time grant for this view.
+      const { grantId } = await api.request('POST', '/v1/ads/intent', { placement: 'replay_ring', runId: run.runId });
+      if (native.adsAvailable()) {
+        if (!(await native.rewardedAd({ grantId, userId: game.userId }))) throw new ApiError(0, 'ad_not_finished', 'No ad, or it was closed early');
+        status.textContent = 'Confirming your extra lives…';
+        await awaitGrant(grantId, 30);
+      } else {
+        if (!(await showNetworkAd())) await showHousePopup();
+        status.textContent = 'Confirming your extra lives…';
+        await api.request('POST', game.webAdRewards === 'attest' ? `/v1/ads/attest/${grantId}` : `/v1/ads/dev-complete/${grantId}`, {});
+        await awaitGrant(grantId, 8);
+      }
     }
+    if (game.run !== run || run.ended) return;
     run.refilledLives += run.maxMisses; // all 5 lives back
     const resumeAtUs = Math.round((performance.now() + 900 - run.ring0Perf) * 1000);
     run.resumes.push({ afterRing: run.verdicts.length - 1, atUs: resumeAtUs });
@@ -963,7 +987,9 @@ async function continueAfterAd() {
     scheduleRing(run.pendingResolveUs, resumeAtUs);
     renderHud();
   } catch (e) {
-    status.textContent = `No extra life this time (${e.code ?? e.message}).`;
+    status.textContent =
+      e.code === 'ad_not_finished' ? 'No extra lives: the ad didn’t finish. Try again, or end the run.' : `No extra lives this time (${e.code ?? e.message}).`;
+    $('ad-continue').disabled = e.code === 'ad_daily_cap';
   }
 }
 
@@ -1009,7 +1035,10 @@ async function endRun() {
     if (best !== null && (p.bestUs === null || best < p.bestUs)) p.bestUs = best;
     saveProfile();
     renderResults(run, local, best, before, { kind: 'offline' });
-    if (run.mode === 'RANKED') boards.publishShared();
+    if (run.mode === 'RANKED') {
+      boards.publishShared();
+      native.notifications.afterRankedRun(game.daily.streak);
+    }
     return;
   }
 
@@ -1038,6 +1067,7 @@ async function endRun() {
         run.daily = res.daily;
         game.daily = res.daily.state;
         renderDaily();
+        native.notifications.afterRankedRun(game.daily.streak);
       }
       boards.invalidate();
       // The server's score and run id make the share link verifiable.
@@ -1299,8 +1329,45 @@ async function loadPrizes() {
   }
 }
 
+/** In the app, once the streak is worth protecting (2+ days), offer a reminder. Asked once; never on first launch. */
+async function renderRemindCard() {
+  const status = await native.notifications.status();
+  $('remind-card').hidden = status !== 'prompt' || game.daily.streak < 2 || store.get('remindAsked', false);
+}
+
+async function answerRemind(yes) {
+  store.set('remindAsked', true);
+  $('remind-card').hidden = true;
+  if (yes && (await native.notifications.request())) native.notifications.afterRankedRun(game.daily.streak);
+}
+
+/** Deletes the account (online) and everything this device stored. Two taps, so it can't happen by accident. */
+async function deleteMyData() {
+  const btn = $('delete-data');
+  const note = $('delete-note');
+  if (btn.dataset.confirm !== 'yes') {
+    btn.dataset.confirm = 'yes';
+    btn.textContent = 'TAP AGAIN TO DELETE';
+    note.textContent = game.online
+      ? 'This deletes your account, Prestige, stats and leaderboard entries. It can’t be undone.'
+      : 'This erases everything saved on this device. It can’t be undone.';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    if (game.online) await api.request('POST', '/v1/account/delete', {});
+    for (const key of Object.keys(localStorage)) if (key.startsWith('omt.')) localStorage.removeItem(key);
+    await native.clearSaved();
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    note.textContent = `Couldn't delete (${e.code ?? 'network_error'}). Check your connection and try again.`;
+  }
+}
+
 function renderTitleCards() {
   renderAgeCard();
+  renderRemindCard();
   loadInbox();
   loadPrizes();
 }
@@ -1507,17 +1574,49 @@ $('menu').addEventListener('click', () => {
 $('open-board').addEventListener('click', () => openBoard());
 $('board-close').addEventListener('click', () => setScreen('title-screen'));
 $('age-card').addEventListener('submit', submitAgeGate);
+$('remind-yes').addEventListener('click', () => answerRemind(true));
+$('remind-no').addEventListener('click', () => answerRemind(false));
+$('delete-data').addEventListener('click', deleteMyData);
+
+// Privacy policy: the app build names its URL; the backend serves /privacy next to /play.
+{
+  const url = document.querySelector('meta[name="omt-privacy-url"]')?.content || (location.pathname.startsWith('/play') ? '/privacy' : '');
+  $('privacy-link').hidden = !url;
+  if (url) $('privacy-link').href = url;
+}
+
+// App shell: challenge links open the app; backgrounding ends a run cleanly; Android back steps out of screens.
+native.onDeepLink((hash) => {
+  const c = decodeChallenge(hash);
+  if (!c || (game.run && !game.run.ended)) return;
+  game.challenge = c;
+  renderChallengeCard();
+  setScreen('title-screen');
+});
+native.onPause(() => {
+  if (game.run && !game.run.ended && $('ad-screen').hidden) endRun();
+});
+native.onBack(() => {
+  if (game.run && !game.run.ended) {
+    endRun();
+    return true;
+  }
+  if (!$('title-screen').hidden) return false;
+  setScreen('title-screen');
+  return true;
+});
 $('inbox-dismiss').addEventListener('click', (e) => {
   store.set('inboxSeen', e.currentTarget.dataset.latest ?? '');
   $('inbox-card').hidden = true;
 });
-$('ad-continue').addEventListener('click', () => continueAfterAd());
+$('ad-continue').addEventListener('click', () => watchAdForLives());
 $('ad-end').addEventListener('click', () => endRun());
 $('open-unlocks').addEventListener('click', () => openUnlocks());
 $('unlocks-close').addEventListener('click', () => setScreen('title-screen'));
 $('share').addEventListener('click', async (e) => {
   const text = e.currentTarget.dataset.text ?? '';
   const out = $('share-text');
+  if (await native.share(text)) return;
   try {
     await navigator.clipboard.writeText(text);
     out.textContent = 'Copied.';
@@ -1577,6 +1676,7 @@ async function connect() {
       prestige: profile.prestige,
     };
     game.webAdRewards = profile.webAdRewards ?? 'none';
+    game.userId = profile.userId;
     if (profile.lifetime) setServerLifetime(profile.lifetime);
     if (profile.daily) game.daily = profile.daily;
     if (profile.player) {
@@ -1619,6 +1719,7 @@ if (location.hash.endsWith('debug')) {
   window.omtDebug = game;
   window.omtFx = fx;
   window.omtBg = bgFx;
+  window.omtApi = api;
 }
 
 /** Web fonts load after first paint; the system fallback stack shows until they arrive. */

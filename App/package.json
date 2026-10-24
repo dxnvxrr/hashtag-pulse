@@ -1,0 +1,28 @@
+{
+  "name": "one-more-tap-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One More Tap for iOS and Android: the web client in a Capacitor shell",
+  "type": "module",
+  "scripts": {
+    "build": "node build-www.mjs",
+    "sync": "node build-www.mjs && cap sync",
+    "configure": "node configure-native.mjs",
+    "ios": "node build-www.mjs && cap sync ios && cap open ios",
+    "android": "node build-www.mjs && cap sync android && cap open android"
+  },
+  "dependencies": {
+    "@capacitor-community/admob": "8.2.1",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/ios": "8.5.3",
+    "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/preferences": "8.0.1",
+    "@capacitor/share": "8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}
